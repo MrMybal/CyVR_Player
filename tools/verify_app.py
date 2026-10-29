@@ -7,12 +7,19 @@ import subprocess
 from pathlib import Path
 import struct
 import zipfile
+import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--panel-only',action='store_true');args=parser.parse_args()
-    apk=ROOT/'dist/android'/('CyVR_Player-panel-debug.apk' if args.panel_only else 'CyVR_Player-debug.apk')
+    parser=argparse.ArgumentParser();parser.add_argument('--panel-only',action='store_true');parser.add_argument('--alpha',action='store_true');args=parser.parse_args()
+    version=ET.parse(ROOT/'android/AndroidManifest.xml').getroot().get('{http://schemas.android.com/apk/res/android}versionName')
+    name=f'CyVR_Player-{version}-'+('panel-' if args.panel_only else '')+'arm64.apk' if args.alpha else ('CyVR_Player-panel-debug.apk' if args.panel_only else 'CyVR_Player-debug.apk')
+    apk=ROOT/'dist/android'/name
     sdk=Path(os.environ.get('ANDROID_HOME',Path(os.environ['LOCALAPPDATA'])/'Android/Sdk'))
     manifest=subprocess.check_output([str(sdk/'build-tools/35.0.1/aapt2.exe'),'dump','xmltree',str(apk),'--file','AndroidManifest.xml'],text=True)
+    if args.alpha:
+        debug=re.search(r'android:debuggable[^=]*=(?:\(type 0x12\))?(false|true|0x[0-9a-f]+)',manifest)
+        assert debug and debug[1] in ('false','0x0'), 'Alpha APK must not be debuggable'
+        assert version in manifest and '-alpha.' in version
     activities=re.split(r'(?m)^            E: activity(?:-alias)? ',manifest)[1:]
     assert len(activities)==(2 if args.panel_only else 3)
     assert 'com.cyvr.player.PanelActivity' in activities[0]
@@ -43,6 +50,16 @@ def main():
             data=archive.read(item)
             assert data[:6]==b'\x7fELF\x02\x01',item.filename
             assert struct.unpack_from('<H',data,18)[0]==183,item.filename
+            if args.alpha:
+                shoff=struct.unpack_from('<Q',data,40)[0]
+                shsize,shcount,shstrings=struct.unpack_from('<HHH',data,58)
+                strings_header=shoff+shsize*shstrings
+                offset,length=struct.unpack_from('<QQ',data,strings_header+24)
+                strings=data[offset:offset+length]
+                for i in range(shcount):
+                    start=struct.unpack_from('<I',data,shoff+shsize*i)[0]
+                    section=strings[start:].split(b'\0',1)[0]
+                    assert not section.startswith(b'.debug_') and section!=b'.symtab', (item.filename,section)
             phoff=struct.unpack_from('<Q',data,32)[0]
             phsize,phcount=struct.unpack_from('<HH',data,54)
             for i in range(phcount):
@@ -54,7 +71,8 @@ def main():
             name_length,extra_length=struct.unpack_from('<HH',header,26)
             assert (item.header_offset+30+name_length+extra_length)%16384==0,item.filename
             libraries.append(item.filename)
-    result={'apk':str(apk),'immersive':not args.panel_only,'native_libraries':len(libraries),'arm64':True,'elf_load_alignment':16384,'zip_library_alignment':16384,'licenses_present':True}
-    (ROOT/('build/apk-validation-panel.json' if args.panel_only else 'build/apk-validation.json')).write_text(json.dumps(result,indent=2)+'\n')
+    result={'apk':str(apk),'alpha':args.alpha,'immersive':not args.panel_only,'native_libraries':len(libraries),'arm64':True,'elf_load_alignment':16384,'zip_library_alignment':16384,'licenses_present':True}
+    report='build/apk-validation'+('-alpha' if args.alpha else '')+('-panel' if args.panel_only else '')+'.json'
+    (ROOT/report).write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result))
 if __name__=='__main__':main()

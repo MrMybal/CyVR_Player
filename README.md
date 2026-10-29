@@ -1,6 +1,6 @@
 # CyVR Player
 
-A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI 0.4 foundation](../CyVR_UI). Development version: **0.4.4-placement-dev**.
+A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI 0.4 foundation](../CyVR_UI). Alpha version: **0.4.4-alpha.1**.
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model.
 
@@ -22,6 +22,8 @@ The second command builds an alternative 2D-only APK with `CYVR_ENABLE_IMMERSIVE
 | `dist/windows/CyVR_Player.exe` | Vulkan UI inspector and media inspection; hardware playback runs on Quest |
 
 Both APK variants keep `com.cyvr.player` and the existing development signing key, so `adb install -r` preserves app files and grants. They replace one another. Android API 32 and Horizon OS v69 or later are required. These are development builds, not store release packages.
+
+For the Android Alpha package, run `python tools/build_ffmpeg_android.py --alpha` then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.4-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
 
 Prerequisites are the existing Android SDK (NDK 27.2.12479018, CMake 3.22.1, Build Tools 35.0.1, platform 34), JDK, LLVM/Windows C++ SDK, and the sibling `../CyVR_UI` checkout. `ANDROID_HOME`, `JAVA_HOME` and `CXX` can override tool locations. `CYVR_UI_ROOT` is the corresponding CMake setting. The local foundation includes the small reusable GPU/lifecycle extension hooks described in [the integration notes](docs/interface.md); retain those local changes when updating it.
 

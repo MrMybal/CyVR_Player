@@ -92,6 +92,14 @@
       "sha256": "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
     },
     {
+      "name": "OpenXR SDK source matching Android loader 1.1.49",
+      "license": "Apache-2.0 and bundled third-party licenses",
+      "commit": "977f6675bc0057d5a54ed290cb5c71c699b1c0ab",
+      "url": "https://codeload.github.com/KhronosGroup/OpenXR-SDK/tar.gz/977f6675bc0057d5a54ed290cb5c71c699b1c0ab",
+      "archive": ".deps/downloads/openxr-sdk-977f6675bc0057d5a54ed290cb5c71c699b1c0ab.tar.gz",
+      "sha256": "4e7de44f9f96721b572c29afe85160b00c9842b034ffa87641f946df46fc5fb9"
+    },
+    {
       "name": "GNU make 4.4.1 MSYS2 (build tool only)",
       "license": "GPL-3.0-or-later; not linked or shipped in the player",
       "url": "https://repo.msys2.org/msys/x86_64/make-4.4.1-2-x86_64.pkg.tar.zst",
