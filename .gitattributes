@@ -1,0 +1,15 @@
+* text=auto eol=lf
+# Preserve byte-identical dependency sources and their locked checksums.
+third_party/** -text
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.h text eol=lf
+*.glsl text eol=lf
+*.frag text eol=lf
+*.vert text eol=lf
+*.comp text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.java text eol=lf

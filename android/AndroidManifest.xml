@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:metavr="http://schemas.meta.com/metavr-sdk" package="com.cyvr.player" android:versionCode="8" android:versionName="0.4.3-render-dev" android:installLocation="auto">
+    <uses-sdk android:minSdkVersion="32" android:targetSdkVersion="34" />
+    <metavr:uses-metavr-sdk metavr:minSdkVersion="69" metavr:targetSdkVersion="207" />
+    <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x00401000" android:required="true" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries><provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker" /></queries>
+    <application android:label="CyVR Player" android:hasCode="true" android:allowBackup="false" android:debuggable="true" android:extractNativeLibs="false" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|quest3s|quest3|questpro" />
+        <activity android:name="com.cyvr.player.PanelActivity" android:exported="true" android:launchMode="singleTask" android:taskAffinity="com.cyvr.player.panel" android:screenOrientation="landscape" android:resizeableActivity="true" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode">
+            <meta-data android:name="android.app.lib_name" android:value="cyvr_player" />
+            <layout android:defaultWidth="1280dp" android:defaultHeight="880dp" android:minWidth="720dp" android:minHeight="495dp" />
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.LAUNCHER" /><category android:name="com.oculus.intent.category.2D" /><category android:name="com.oculus.intent.category.VR_HOME_LAUNCHER" /><category android:name="com.oculus.intent.category.OVERLAY_LAUNCHER" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:mimeType="video/*" /><data android:scheme="content" /><data android:scheme="https" /><data android:scheme="http" /><data android:scheme="rtsp" /></intent-filter>
+        </activity>
+        <activity-alias android:name="com.cyvr.player.PlayerActivity" android:targetActivity="com.cyvr.player.PanelActivity" android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="cyvr_player" />
+        </activity-alias>
+        <activity android:name="com.cyvr.player.ImmersiveActivity" android:exported="false" android:launchMode="singleTask" android:taskAffinity="com.cyvr.player.immersive" android:screenOrientation="landscape" android:resizeableActivity="false" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode">
+            <meta-data android:name="android.app.lib_name" android:value="cyvr_player" />
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.DEFAULT" /><category android:name="com.oculus.intent.category.VR" /><category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" /></intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,51 @@
+# CyVR_UI 0.4 integration
+
+## Shared hosts
+
+The application consumes the sibling foundation with `add_subdirectory(CYVR_UI_ROOT)` and links `cyvr_ui`, `cyvr_gpu` and **`cyvr_android`**. It no longer compiles a private copy of `xr_app.cpp` or owns a second Quest runtime. `src/app/android_main.cpp` configures **`runAndroidApp()`**. The former `quest_main.cpp` was removed; a pre-migration source backup is in the ignored `build/migration-04-backup` folder.
+
+`PlayerApplication` supplies `renderApplication`, `handleApplicationAction`, `applicationTick` and `applicationBack` to the same `UiModel`. Themes and language preferences come from the shared core. English source message IDs are the default; `assets/locales/fr.json` generates the French player catalogue via `tools/generate_player_locales.py`. User file names, document identifiers and URLs are never translated.
+
+`PanelActivity` is the only launcher and declares Home, Overlay and 2D categories. It is resizable and uses `com.cyvr.player.panel`. `ImmersiveActivity` is unexported, uses the VR categories and a separate `com.cyvr.player.immersive` task affinity. Both load `libcyvr_player.so`. The legacy `.PlayerActivity` alias retains its own native-library metadata so existing external launch commands continue to work.
+
+The Java base activity handles system services and activity transitions, not drawing widgets. It passes Back to C++ navigation. On a presentation change, the host releases its GPU resources and XR session, persists application state, and requests the next activity. Returning to 2D uses the documented Home pending-intent path. After a host returns, `android_main` continues servicing native-glue lifecycle messages until `APP_CMD_DESTROY`; otherwise Java's synchronous pause/stop callbacks could block and cause an ANR. Hosts are serialized while their application model and decoder are alive, but this final lifecycle drain does not hold the host lock.
+
+## Native resolution and video extensions
+
+The local 0.4 foundation received generic `AndroidRenderExtension` and optional `AndroidXrRenderExtension` hooks. They allow an application to extend Vulkan device features, attach GPU resources, submit due video frames and provide XR composition layers without copying the framework runtime. No FFmpeg, media URLs or codec dependencies were added to CyVR_UI. Existing local foundation changes, including application lifecycle hooks, remain in place.
+
+The player enables `AndroidAppConfig::nativeResolution`. In 2D, the shared renderer draws directly into the actual Android swapchain extent and applies inverse mapping to pointer coordinates. The logical 1440 × 990 canvas is letterboxed for other aspect ratios rather than reflowed. The Quest system provides moving/resizing/closing; the app does not add competing 2D window controls.
+
+In immersion, scene targets use each runtime-recommended eye size without the reference app's 1024-pixel cap. UI layer textures scale with the recommended eye width while retaining logical component coordinates. In native quality the video allocates its decoded source dimensions, separately from scene/UI resolution. A source that exceeds GPU limits reports an error instead of silently reducing its resolution. View-relative fallback handles temporarily unavailable tracking and recenters into LOCAL when a head pose is available.
+
+`src/app/android_renderer.cpp` extends both hosts. In 2D it converts each due hardware image into a full-size Vulkan texture, supplied to the shared UI renderer as a borrowed image view. The preview letterboxes and uses the selected left-eye region for SBS/TB. Resizing recreates the shared renderer, then rebinds the retained video texture, including while paused. In immersion the same conversion writes a full-size OpenXR video swapchain. Per-eye quad or equirect2 layers implement mono/SBS/TB and 180°/360°.
+
+`VideoRenderer` imports AHardwareBuffer with the driver's YCbCr conversion, imports acquisition sync FDs, transfers FOREIGN queue ownership and retains image leases until GPU completion. Imports are bounded to twelve buffers and reset on generation changes. Source queues hold at most three images. GPU waits are conservative; sustained resolution/thermal benchmarks are still needed. Pixel readback exists only in the separate diagnostic probe after playback.
+
+## Application state and sources
+
+The player uses the shared `UiModel::interfaceHidden` flag for video-only viewing. `setInterfaceHidden()` clears captures/widgets, and `revealInterface()` consumes the first waking action. The XR host keeps the application video layers while omitting panel, dock, HUD and cursor layers and clearing hand/ray geometry. A dedicated Touch A action and either trigger restore the UI without requiring a ray hit on an invisible panel. Android Back first reveals a hidden interface before navigating or changing hosts. In 2D the player draws only the aspect-fitted video/black bars, and the host maps that logical drawing across the full physical viewport instead of the normal letterboxed UI canvas. `viewportSize` keeps the video's geometry correct after resize. Enter/Space and the F11 toggle pass through the Java event bridge; system Home/volume commands are unchanged. The visibility flag is deliberately transient rather than saved with documents.
+
+`PlayerSession` owns a serialized media worker. File/network I/O, Android provider queries and decoding run outside the UI/render thread. Pausing stops feeding the decoder. Seeking recreates the decoder/reader with a new epoch and discards preroll before the requested position. A paused restoration decodes one still frame, then stays paused. The current presentation clock is monotonic and is not yet audio synchronized.
+
+The timeline uses the shared `handleApplicationSlider` callback with `SliderPhase::Begin`, `Preview`, `Commit` and `Cancel`. Pointer capture retains dragging beyond the track and clamps the final selection. Preview changes only the thumb/time label; a single committed seek reaches the media worker on release. Cancellation on focus loss, navigation or hidden controls does not seek, and a cancelled gesture cannot restart until a fresh press. Pending seeks expose their target until a new-epoch image is presented, preserving the requested position when activities change. Seeking preserves playback/pause state, including a paused preview after end-of-stream. A final preroll image is retained for a target beyond the last frame's timestamp. No pixel thumbnail decoding was added while dragging.
+
+`PlayerApplication` writes a bounded versioned state file to `internalDataPath/player-state.bin`, replacing the previous file atomically. It preserves the current folder/history, URL draft, source URI/title, page, scroll offset, projection/stereo flags, position and intended play/pause state. Resume/pause and host release commit state. Settings remain in the original external `preferences.txt`. Java moves the former `PlayerActivity` tree preference into the common `player` preference store while retaining existing URI grants. No app data is cleared during migration or installation.
+
+The browser keeps SAF documents as `content://` URIs; ContentResolver supplies duplicated FDs with their offsets/lengths. Lists are bounded to 512 entries, and provider requests are cancellable. Network startup preserves the existing TLS checks and bounded in-band SPS/PPS discovery needed for HLS/MPEG-TS. An incoming VIEW intent supersedes saved media before restoration starts, avoiding an unnecessary connection to a previous stream.
+
+## Build and scope
+
+`CYVR_ENABLE_IMMERSIVE=OFF` excludes the XR host and loader; the entry point also sets `immersiveEnabled=false`. `tools/build_app.py --target android --no-immersive` strips the immersive activity and runtime-broker queries from its generated manifest. Both variants keep the original package and signing key. Android native/ZIP alignment is 16 KiB; license notices are packaged with the APK.
+
+Current playback supports AVC/HEVC SDR. PQ/HLG are explicitly rejected until tone mapping exists. Inverse BT.709 transfer is applied before sRGB output; full colorimetric qualification, rotation and dynamic format changes remain pending. Equirectangular projections do not imply fisheye/cubemap/proprietary format support. Audio output, subtitles, splats and CAS/FSR dispatch are still outside this implemented scope. See [validation](validation.md) for tests actually run and remaining device checks.
+
+
+## Image processing and thumbnails (0.4.0)
+
+The player now uses `DrawList::video()` and `VulkanRenderer::setVideoTexture()` for its borrowed playback texture. The original image-atlas binding remains independent for the browser's static thumbnails. `UiModel::applicationController` exposes generic thumbstick/trigger/grip/aim state from the shared XR host; a consumed application zoom gesture cannot also select a widget or reveal hidden chrome. The core contains no player or FFmpeg dependency. See [image processing](image-processing.md) for filter passes, budgets, paused-frame ownership and persisted controls.
+
+
+### Player performance hooks (0.4.2)
+
+The local foundation also exposes `UiModel::renderApplicationDebug` for the player's shared video/render HUD, and `AndroidRenderExtension::frameSubmitted()` after a successful panel present or a nonempty OpenXR frame end. Neither hook equates submission to physical compositor display. The optional Vulkan query entry points are loaded with the existing device functions. Keep these small local hooks when updating the foundation.

@@ -1,0 +1,402 @@
+#include "cyvr/locale.hpp"
+#include "cyvr/player/application.hpp"
+#include "cyvr/player/media.hpp"
+#include <cstdio>
+namespace cyvr::player {
+namespace {
+std::string fit(cyvr::DrawList &d, std::string_view value, float width,
+                float size = 24) {
+  std::string text(value);
+  while (!text.empty() && d.textWidth(size, text) > width) {
+    auto last = text.size() - 1;
+    while (last > 0 && (static_cast<unsigned char>(text[last]) & 0xc0) == 0x80)
+      --last;
+    text.resize(last);
+  }
+  return text;
+}
+std::string clockText(std::int64_t us) {
+  char out[40];
+  auto s = std::max<std::int64_t>(0, us / 1000000);
+  std::snprintf(out, sizeof(out), "%02lld:%02lld:%02lld",
+                static_cast<long long>(s / 3600),
+                static_cast<long long>(s / 60 % 60),
+                static_cast<long long>(s % 60));
+  return out;
+}
+} // namespace
+bool PlayerApplication::draw_performance(cyvr::DrawList &d) {
+  using cyvr::Color;
+  d.clear();
+  const auto white = Color::hex(0xf0f5f6), muted = Color::hex(0xa7b7bf),
+             accent = Color::hex(0x86e7cf);
+  d.rect({0, 0, 620, 760}, Color::hex(0x16262f, .98f), 22);
+  d.text(28, 24, 20, tr("MEASURED PERFORMANCE"), accent);
+  d.text(28, 66, 34, tr("Video and rendering"), white);
+  const double now = std::chrono::duration<double>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+  const auto video = session_.metrics();
+  auto value = [&](std::optional<double> n, std::string_view unit,
+                   int precision = 1) {
+    return n ? cyvr::formatNumber(ui_.settings.language, *n, precision) +
+                   std::string(unit)
+             : std::string(tr("Not measured"));
+  };
+  float y = 130;
+  auto row = [&](std::string_view label, const std::string &number) {
+    d.text(28, y, 20, tr(label), muted);
+    d.text(345, y, 21, number, white);
+    y += 41;
+  };
+  row("Source (nominal)",
+      value(state_.nominal_fps > 0 ? std::optional<double>(state_.nominal_fps)
+                                   : std::nullopt,
+            " fps", 2));
+  row("Video to GPU", value(video.submit_rate, " /s"));
+  row("Decoder output", value(video.decode_rate, " /s"));
+  row("App submissions", value(render_monitor.submissions.sample(now), " /s"));
+  row("Runtime refresh",
+      value(ui_.stats.displayHz > 0 ? std::optional<double>(ui_.stats.displayHz)
+                                    : std::nullopt,
+            " Hz", 0));
+  row("Video GPU mean", value(render_monitor.gpu.mean(), " ms", 2));
+  row("Video GPU p95", value(render_monitor.gpu.p95(), " ms", 2));
+  row("Video work + waits", value(render_monitor.work.mean(), " ms", 2));
+  row("Late drops / decoded",
+      std::to_string(video.dropped) + " / " + std::to_string(video.decoded));
+  row("Queued frames", std::to_string(video.queued));
+  row("Render errors", std::to_string(render_monitor.errors));
+  d.line({28, 594}, {592, 594}, muted);
+  d.text(28, 613, 18, tr("Video: distinct frames; VR redraws are separate."),
+         accent);
+  d.text(28, 648, 18, tr("Submissions do not measure compositor display."),
+         muted);
+  d.text(28, 683, 18, tr("GPU: video passes, both eyes in VR; excludes UI."),
+         muted);
+  d.text(28, 718, 18, tr("Close with the Performance button or HUD key."),
+         muted);
+  return true;
+}
+bool PlayerApplication::draw(cyvr::DrawList &d) {
+  using cyvr::Color;
+  d.clear();
+  ui_.clearApplicationWidgets();
+  const bool light = ui_.settings.theme == cyvr::Theme::Light,
+             ocean = ui_.settings.theme == cyvr::Theme::Ocean;
+  const bool immersive = ui_.presentation == cyvr::Presentation::Immersive;
+  auto video = [&](cyvr::Rect area, bool fullWindow = false) {
+    d.rect(area, Color::hex(0x000000));
+    if (!preview_ready || immersive || state_.width <= 0 || state_.height <= 0)
+      return;
+    const double par =
+        half_stereo && stereo ? (stereo == 1 ? 2. : .5) : state_.pixel_aspect;
+    const float aspect = float(
+        eye_aspect(state_.width, state_.height, StereoLayout(stereo), par));
+    const float windowAspect = fullWindow && ui_.viewportSize.y > 0
+                                   ? ui_.viewportSize.x / ui_.viewportSize.y
+                                   : area.w / area.h;
+    auto picture = area;
+    picture.w *= std::min(1.f, aspect / windowAspect);
+    picture.h *= std::min(1.f, windowAspect / aspect);
+    picture.x += (area.w - picture.w) * .5f;
+    picture.y += (area.h - picture.h) * .5f;
+    auto uv = preview_is_view
+                  ? UvRect{0, 0, 1, 1}
+                  : eye_rect(StereoLayout(stereo), Eye::left, swap_eyes);
+    d.video(picture, {uv.x, uv.y, uv.width, uv.height});
+  };
+  if (ui_.interfaceHidden) {
+    video({0, 0, 1440, 990}, true);
+    return true;
+  }
+  auto white = Color::hex(light ? 0x142b35 : 0xf0f5f6),
+       muted = Color::hex(light ? 0x48616b : 0xa7b7bf);
+  auto accent = Color::hex(light ? 0x126854 : ocean ? 0x95bdff : 0x86e7cf);
+  auto surface = Color::hex(light ? 0xc1d3db : ocean ? 0x293e66 : 0x22323b);
+  d.rect({0, 0, 1440, 990},
+         Color::hex(light   ? 0xe4eef1
+                    : ocean ? 0x141f3b
+                            : 0x182228,
+                    ui_.settings.highContrast ? 1 : ui_.settings.opacity),
+         30);
+  d.text(32, 22, 34, "CyVR Player", white);
+  d.text(270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
+  button(d, 1060, {740, 22, 160, 52},
+         ui_.settings.language == "fr" ? "Français" : "English");
+  button(d, 1061, {914, 22, 216, 52},
+         light   ? "Light"
+         : ocean ? "Ocean"
+                 : "Graphite");
+  button(d, 1062, {1144, 22, 264, 52},
+         immersive ? "Return to 2D" : "Enter immersive", false,
+         immersive || ui_.immersiveAvailable);
+  const char *pages[]{"Library", "Playback", "Open stream", "Display"};
+  for (int i = 0; i < 4; ++i)
+    button(d, 1000 + i, {32.f + i * 343, 94, 328, 62}, pages[i], page_ == i);
+  if (page_ == 0) {
+    d.text(36, 190, 34, tr("Your videos"), white);
+    button(d, 1010, {800, 186, 170, 52}, "Parent folder", false,
+           !parents_.empty());
+    button(d, 1011, {984, 186, 162, 52}, "Refresh");
+    button(d, 1012, {1160, 186, 244, 52}, "Allow a folder", false,
+           bool(platform_.request_tree));
+    d.text(36, 251, 20,
+           fit(d,
+               directory_.rfind("content://", 0) == 0
+                   ? tr("Authorized Android folder")
+                   : std::string_view(directory_),
+               1350, 20),
+           muted);
+    for (int row = 0; row < 7 && offset_ + row < int(entries_.size()); ++row) {
+      const auto &item = entries_[offset_ + row];
+      float y = 304.f + row * 75;
+      d.rect({32, y, 1376, 65},
+             ui_.hovered() == 1100 + row ? Color::hex(light   ? 0xacd6ce
+                                                      : ocean ? 0x385984
+                                                              : 0x344b56)
+                                         : surface,
+             10);
+      if (preview_present_[row] && !item.directory)
+        d.image({44, y + 1, 112, 63},
+                {.5f / 160, (row * 90 + .5f) / 630, 159.f / 160, 89.f / 630});
+      else
+        d.text(51, y + 17, 22,
+               tr(item.directory                                     ? "FOLDER"
+                  : classify_extension(item.name) == FileKind::splat ? "SPLATS"
+                                                                     : "VIDEO"),
+               accent);
+      d.text(195, y + 16, 24, fit(d, item.name, 1010), white);
+      if (!item.directory) {
+        const double scale = item.size >= 1073741824 ? 1073741824.
+                             : item.size >= 1048576  ? 1048576.
+                                                     : 1024.;
+        const char *unit = item.size >= 1073741824 ? " GiB"
+                           : item.size >= 1048576  ? " MiB"
+                                                   : " KiB";
+        d.text(1220, y + 20, 19,
+               cyvr::formatNumber(ui_.settings.language, item.size / scale, 1) +
+                   unit,
+               muted);
+      }
+      ui_.applicationWidget(1100 + row, {32, y, 1376, 65});
+    }
+    if (entries_.empty())
+      d.text(50, 364, 26, tr("No accessible videos in this folder yet."),
+             muted);
+    button(d, 1013, {1040, 850, 172, 56}, "Previous", false, offset_ > 0);
+    button(d, 1014, {1226, 850, 178, 56}, "Next", false,
+           offset_ + 7 < int(entries_.size()));
+    auto status =
+        browse_status_ == "Reading folder..." ? std::string(tr(browse_status_))
+        : !browse_status_.empty() && browse_status_[0] >= '0' &&
+                browse_status_[0] <= '9'
+            ? std::to_string(entries_.size()) + " " + std::string(tr("items"))
+            : browse_status_;
+    d.text(36, 861, 21, fit(d, status, 980, 21), muted);
+  } else if (page_ == 1) {
+    d.text(36, 186, 34,
+           fit(d,
+               state_.title.empty() ? tr("Your next screening")
+                                    : std::string_view(state_.title),
+               1368, 34),
+           white);
+    cyvr::Rect area{32, 252, 900, 506};
+    video(area);
+    if (!preview_ready || immersive || state_.width <= 0 ||
+        state_.height <= 0) {
+      d.text(60, 445, 22,
+             fit(d,
+                 tr(immersive ? "Video is shown in the immersive scene."
+                              : "Choose a video."),
+                 840, 22),
+             Color::hex(0xa7b7bf));
+    }
+    d.rect({956, 252, 452, 506}, surface, 18);
+    d.text(980, 276, 19, tr("SOURCE / DECODER"), accent);
+    d.text(980, 329, 21, fit(d, tr(state_.status), 400, 21), white);
+    if (state_.width > 0)
+      d.text(980, 386, 26,
+             std::to_string(state_.width) + " × " +
+                 std::to_string(state_.height) + " px",
+             white);
+    d.text(980, 444, 18, fit(d, state_.codec, 400, 18), muted);
+    d.text(980, 510, 18,
+           fit(d,
+               tr(image.quality == 0   ? "Native"
+                  : image.quality == 1 ? "FidelityFX CAS"
+                  : image.quality == 2 ? "FSR 1 (EASU + RCAS)"
+                                       : "Snapdragon GSR 1"),
+               400, 18),
+           muted);
+    d.text(980, 574, 18,
+           fit(d,
+               tr(immersive ? "Trigger / A / Back: show interface"
+                            : "Tap / Enter / Space: show interface"),
+               400, 18),
+           muted);
+    button(d, 1331, {980, 664, 125, 44}, "Zoom out");
+    button(d, 1332, {1120, 664, 125, 44}, "Zoom in");
+    button(d, 1333, {1260, 664, 125, 44}, "Fit image");
+    button(d, 1334, {980, 716, 405, 34}, "Performance", ui_.debugVisible);
+    const auto position = timeline_position();
+    const bool canSeek =
+        state_.ready && state_.seekable && state_.duration_us > 0;
+    d.text(36, 770, 22,
+           clockText(position) + " / " +
+               (state_.duration_us > 0 ? clockText(state_.duration_us)
+                                       : "--:--:--"),
+           white);
+    const cyvr::Rect timeline{330, 760, 1078, 48};
+    const float progress =
+        state_.duration_us > 0
+            ? float(std::clamp(double(position) / double(state_.duration_us),
+                               0., 1.))
+            : 0.f;
+    d.rect({timeline.x, 779, timeline.w, 10}, surface, 5);
+    auto trackColor = canSeek ? accent : muted;
+    trackColor.a = canSeek ? 1.f : .4f;
+    if (progress > 0)
+      d.rect({timeline.x, 779, timeline.w * progress, 10}, trackColor, 5);
+    if (canSeek) {
+      const float knob = scrubbing_ || ui_.hovered() == 1025 ? 24.f : 20.f;
+      d.rect({timeline.x + timeline.w * progress - knob * .5f, 784 - knob * .5f,
+              knob, knob},
+             accent, knob * .5f);
+    }
+    ui_.applicationWidget(1025, timeline, cyvr::Control::Slider, canSeek);
+    d.text(980, 630, 18,
+           fit(d,
+               tr(canSeek ? "Drag the bar to seek"
+                          : "Seeking unavailable for this source"),
+               400, 18),
+           muted);
+    button(d, 1020, {32, 814, 260, 64}, state_.playing ? "Pause" : "Resume",
+           false, state_.ready && !state_.ended);
+    button(d, 1021, {310, 814, 200, 64}, "-10 s", false,
+           state_.ready && state_.seekable);
+    button(d, 1022, {528, 814, 200, 64}, "+10 s", false,
+           state_.ready && state_.seekable);
+    button(d, 1023, {746, 814, 200, 64}, "Stop", false, state_.ready);
+    button(d, 1024, {964, 814, 444, 64}, "Hide interface", false, state_.ready);
+    d.text(36, 891, 19,
+           tr("Development build: audio output and subtitles are not connected "
+              "yet."),
+           Color::hex(light ? 0x865014 : 0xf2c683));
+  } else if (page_ == 2) {
+    d.text(36, 187, 34, tr("Open a video stream"), white);
+    d.text(36, 243, 22, tr("HTTP(S), HLS, RTSP — enter the complete address."),
+           muted);
+    d.rect({32, 290, 1376, 72}, Color::hex(light ? 0xc1d3db : 0x0e1b22), 12);
+    d.text(52, 311, 24, fit(d, url_, 1310), white);
+    std::string keys = symbols_ ? R"~(!@#$%^&*()[]{}<>+=_?:;/.,~-|\"'`)~"
+                       : shift_ ? "1234567890QWERTYUIOPASDFGHJKL:ZXCVBNM./-"
+                                : "1234567890qwertyuiopasdfghjkl:zxcvbnm./-";
+    for (int i = 0; i < int(keys.size()); ++i)
+      button(d, 1200 + i,
+             {36.f + (i % 10) * 136, 390.f + (i / 10) * 83, 124, 67},
+             std::string(1, keys[i]));
+    button(d, 1250, {36, 746, 230, 64}, "Backspace");
+    button(d, 1251, {280, 746, 180, 64}, "Clear");
+    button(d, 1252, {474, 746, 150, 64}, "https://");
+    button(d, 1253, {638, 746, 190, 64}, "Symbols", symbols_);
+    button(d, 1255, {842, 746, 140, 64}, "Aa", shift_, !symbols_);
+    button(d, 1254, {36, 838, 1368, 66}, "Open", true, !url_.empty());
+  } else {
+    const char *tabs[]{"Video format", "Image corrections", "Image quality"};
+    d.text(36, 182, 34, tr(tabs[display_tab_]), white);
+    for (int i = 0; i < 3; ++i)
+      button(d, 1300 + i, {36.f + i * 458, 246, 444, 58}, tabs[i],
+             display_tab_ == i);
+    auto slider = [&](int id, float y, std::string_view label, float value,
+                      float lo, float hi) {
+      d.text(36, y + 8, 22, tr(label), white);
+      d.text(320, y + 8, 22,
+             cyvr::formatNumber(ui_.settings.language, value, 2), accent);
+      const float f = std::clamp((value - lo) / (hi - lo), 0.f, 1.f);
+      const cyvr::Rect r{470, y, 934, 48};
+      d.rect({r.x, y + 20, r.w, 8}, surface, 4);
+      d.rect({r.x, y + 20, r.w * f, 8}, accent, 4);
+      d.rect({r.x + r.w * f - 10, y + 14, 20, 20}, accent, 10);
+      ui_.applicationWidget(id, r, cyvr::Control::Slider);
+    };
+    if (display_tab_ == 0) {
+      d.text(36, 340, 23, tr("Eye layout"), muted);
+      for (int i = 0; i < 3; ++i)
+        button(d, 1030 + i, {36.f + i * 458, 382, 444, 68},
+               i == 0   ? "2D video"
+               : i == 1 ? "3D side by side (SBS)"
+                        : "3D top / bottom (TB)",
+               stereo == i);
+      d.text(36, 490, 23, tr("Projection"), muted);
+      for (int i = 0; i < 3; ++i)
+        button(d, 1040 + i, {36.f + i * 458, 532, 444, 68},
+               i == 0   ? "Cinema screen"
+               : i == 1 ? "VR 180°"
+                        : "Panorama 360°",
+               projection == i, i == 0 || platform_.panorama);
+      button(d, 1050, {36, 652, 444, 68}, "Recenter screen", false, immersive);
+      button(d, 1051, {494, 652, 444, 68}, "Half-resolution 3D", half_stereo,
+             stereo != 0);
+      button(d, 1052, {952, 652, 452, 68}, "Swap eyes", swap_eyes, stereo != 0);
+
+      button(d, 1331, {36, 758, 215, 60}, "Zoom out");
+      button(d, 1332, {267, 758, 215, 60}, "Zoom in");
+      button(d, 1333, {498, 758, 250, 60}, "Fit image");
+      d.text(36, 847, 21, tr("Left stick: seek 10 s / Right stick: zoom"),
+             muted);
+    } else if (display_tab_ == 1) {
+      slider(1340, 330, "Exposure (EV)", image.exposure, -2, 2);
+      slider(1341, 398, "Contrast", image.contrast, .5f, 1.5f);
+      slider(1342, 466, "Saturation", image.saturation, 0, 2);
+      slider(1343, 534, "Gamma", image.gamma, .5f, 2);
+      slider(1344, 602, "Zoom", image.zoom, 1, 4);
+      slider(1345, 670, "Horizontal position", image.pan_x, -1, 1);
+      slider(1346, 738, "Vertical position", image.pan_y, -1, 1);
+      button(d, 1330, {36, 830, 340, 60}, "Reset image");
+      d.text(406, 849, 20, tr("Grip + trigger, move hand up/down: zoom"),
+             muted);
+    } else {
+      for (int i = 0; i < 4; ++i)
+        button(d, 1310 + i, {36.f + i * 343, 350, 328, 68},
+               i == 0   ? "Native"
+               : i == 1 ? "FidelityFX CAS"
+               : i == 2 ? "FSR 1 (EASU + RCAS)"
+                        : "Snapdragon GSR 1",
+               image.quality == i);
+      d.text(36, 462, 22, tr("Display resolution"), muted);
+      for (int i = 0; i < 4; ++i)
+        button(d, 1320 + i, {36.f + i * 343, 508, 328, 68},
+               i == 0   ? "Headset / window"
+               : i == 1 ? "1.25x"
+               : i == 2 ? "1.5x"
+                        : "2x",
+               image.upscale == i);
+      slider(1347, 634, "Sharpness", image.sharpness, 0, 1);
+      button(d, 1330, {36, 758, 340, 60}, "Reset image");
+      d.text(
+          36, 850, 21,
+          tr("Reconstructs the displayed view / UI stays at native resolution"),
+          muted);
+      d.text(36, 885, 19,
+             fit(d,
+                 processing_status.empty()
+                     ? tr("Automatic input resolution / compare with Native")
+                     : std::string_view(processing_status),
+                 1360, 19),
+             muted);
+    }
+  }
+  d.line({32, 929}, {1408, 929}, Color::hex(light ? 0xb0c3c9 : 0x354851));
+  d.text(36, 950, 18,
+         ui_.toast().empty()
+             ? tr(immersive ? (image.quality
+                                   ? "Spatial enhancement active"
+                                   : "Native source resolution / no upscaling")
+                            : "Use Quest system controls to move, resize or "
+                              "close this window.")
+             : std::string_view(ui_.toast()),
+         accent);
+  return true;
+}
+} // namespace cyvr::player

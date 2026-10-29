@@ -1,0 +1,33 @@
+build/
+out/
+.deps/
+__pycache__/
+*.user
+.cache/
+dist/
+
+# Local configuration, signing material and runtime data
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.key
+*.pem
+player-state*.bin
+*.log
+*.dmp
+*.pdb
+CMakeUserPresets.json
+.idea/
+.vscode/
+.vs/
+.codex/
+.agents/
+.DS_Store
+
+# Local scan reports (keep review results outside the published source tree)
+gitleaks-results*
+*.sarif

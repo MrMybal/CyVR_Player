@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "recorded_on": "2026-10-29",
+  "dependencies": [
+    {
+      "name": "FidelityFX-CAS",
+      "repository": "https://github.com/GPUOpen-Effects/FidelityFX-CAS",
+      "commit": "9fabcc9a2c45f958aff55ddfda337e74ef894b7f",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "third_party/cas/ffx_a.h",
+          "sha256": "87123a613d6e473106d2c470226caeb8ab229bacf7386a7512a7b4dd55e20553",
+          "source": "ffx-cas/ffx_a.h"
+        },
+        {
+          "path": "third_party/cas/ffx_cas.h",
+          "sha256": "8499084769bae478c8cfedf388554dc1c2f5def360d7e9c4691961e0388ff44f",
+          "source": "ffx-cas/ffx_cas.h"
+        },
+        {
+          "path": "third_party/cas/LICENSE.txt",
+          "sha256": "d27914243bd12a70fff24e12f09cb12cf8e9462d128e2312917716f1041b98d6",
+          "source": "LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "name": "FidelityFX-FSR1",
+      "repository": "https://github.com/GPUOpen-Effects/FidelityFX-FSR",
+      "commit": "a21ffb8f6c13233ba336352bdff293894c706575",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "third_party/fsr1/ffx_a.h",
+          "sha256": "7769397bdaeb4a8fdf4e9c4280670061849646dec0025226f6c8e93ba5aad702",
+          "source": "ffx-fsr/ffx_a.h"
+        },
+        {
+          "path": "third_party/fsr1/ffx_fsr1.h",
+          "sha256": "5706305ea609050417c4a9870a7c06681be4c8712cb5bbfae1b8aa17c089ee94",
+          "source": "ffx-fsr/ffx_fsr1.h"
+        },
+        {
+          "path": "third_party/fsr1/LICENSE.txt",
+          "sha256": "35de7971ddcabc9306916d0d6a5b20badc0ed39b0e2685d9dd360edc711884e3",
+          "source": "license.txt"
+        }
+      ]
+    },
+    {
+      "name": "Snapdragon-GSR1",
+      "repository": "https://github.com/SnapdragonGameStudios/snapdragon-gsr",
+      "commit": "d926f074bcb9d714e179f1ce0fcb9ee2eeb5074e",
+      "license": "BSD-3-Clause",
+      "files": [
+        {
+          "path": "third_party/gsr1/sgsr1_shader_mobile.frag",
+          "sha256": "93e8db987dc79f62e68805f968d63989e5d50daebe4d040e4c7104047ad49139",
+          "source": "sgsr/v1/include/glsl/sgsr1_shader_mobile.frag"
+        },
+        {
+          "path": "third_party/gsr1/LICENSE",
+          "sha256": "bc496633d3db8c6ca1362216ec382d361b69c7d5518acd6bbfd91503febfb3ef",
+          "source": "LICENSE"
+        }
+      ]
+    }
+  ],
+  "external_dependencies": [
+    {
+      "name": "FFmpeg Windows LGPL shared development SDK",
+      "license": "LGPL-3.0-or-later",
+      "ffmpeg_commit": "611cec792aa54e2e53dbc1be95dcf5955d9a99ba",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-28-19-47/ffmpeg-n8.1.3-25-g611cec792a-win64-lgpl-shared-8.1.zip",
+      "archive": ".deps/downloads/ffmpeg-n8.1.3-25-g611cec792a-win64-lgpl-shared-8.1.zip",
+      "sha256": "0448c3f3b9bdc724cc0189d5ce6e6bfa5b8937e7ec408e1e97fb08719bdb3b92"
+    },
+    {
+      "name": "FFmpeg source for Android",
+      "license": "LGPL-3.0-or-later under this build configuration",
+      "commit": "611cec792aa54e2e53dbc1be95dcf5955d9a99ba",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/611cec792aa54e2e53dbc1be95dcf5955d9a99ba",
+      "archive": ".deps/downloads/ffmpeg-611cec792aa54e2e53dbc1be95dcf5955d9a99ba.tar.gz",
+      "sha256": "d6228fe2111721062178221edf9b4c449b66fc9b06c1fd15eb14c97537daa559"
+    },
+    {
+      "name": "Mbed TLS 3.6.7",
+      "license": "Apache-2.0 selected from upstream dual licensing",
+      "url": "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2",
+      "archive": ".deps/downloads/mbedtls-3.6.7.tar.bz2",
+      "sha256": "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
+    },
+    {
+      "name": "GNU make 4.4.1 MSYS2 (build tool only)",
+      "license": "GPL-3.0-or-later; not linked or shipped in the player",
+      "url": "https://repo.msys2.org/msys/x86_64/make-4.4.1-2-x86_64.pkg.tar.zst",
+      "archive": ".deps/downloads/make-4.4.1-2-x86_64.pkg.tar.zst",
+      "sha256": "2408af61717dae87b00c855b132769a125c708907fc94a46bb16dae076113e5c"
+    }
+  ]
+}

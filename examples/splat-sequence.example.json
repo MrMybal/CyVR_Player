@@ -1,0 +1,13 @@
+{
+  "schema": "cyvr-splat-sequence-proposal-1",
+  "status": "design-example-not-yet-supported",
+  "time_base": { "numerator": 1, "denominator": 90000 },
+  "coordinate_system": { "right": "+X", "up": "+Y", "forward": "-Z", "unit": "meter" },
+  "sample_encoding": "spz-independent-keyframes",
+  "audio": { "uri": "audio.flac", "start_pts": 0 },
+  "frames": [
+    { "pts": 0, "duration": 3000, "uri": "frames/000000.spz" },
+    { "pts": 3000, "duration": 3000, "uri": "frames/000001.spz" },
+    { "pts": 6000, "duration": 3000, "uri": "frames/000002.spz" }
+  ]
+}
