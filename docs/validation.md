@@ -1,5 +1,16 @@
 # Validation et performances
 
+## 0.4.4 — vidéo indépendante du panneau immersif (29 octobre 2026)
+
+- Le rendu vidéo utilisait la pose du panneau de commandes à chaque image. La réorientation du panneau au relâchement d'un déplacement faisait donc tourner/déplacer le cinéma ou le panorama.
+- La vidéo possède maintenant un placement de scène indépendant, initialisé devant la vue courante. Couches natives et reconstruction CAS/FSR/GSR utilisent ce même placement. Déplacer/relâcher le panneau, masquer/rappeler les commandes ou recréer les ressources de filtre conserve l'ancrage vidéo.
+- Le bouton « Recentrer la vidéo » repositionne uniquement la vidéo devant la vue courante. Les commandes restent à leur emplacement. Zoom et position vidéo restent disponibles. Le placement est conservé pendant l'hôte immersif courant, sans nouveau format de données ni service d'ancrage persistant.
+- Le socle local transmet les changements d'origine OpenXR au lecteur. Une transformation connue est appliquée à son instant d'effet ; le passage de VIEW de secours à LOCAL transforme la pose existante. Une origine inconnue et le placement physique avec le casque porté restent à qualifier sur le runtime réel.
+- Six suites CTest réussies, dont 133 contrôles de placement (déplacement continu, orientation au relâchement, zoom/pan, changement d'origine, VIEW→LOCAL, recentrage et commande UI indépendante) et les 134 cas GPU existants. Versions Windows, Android hybride et Android strictement 2D compilées : `0.4.4-placement-dev`, code 9.
+- Les APK conservent le paquet et la clé de développement. Signatures, activités, bibliothèques ARM64, alignements 16 Kio, notices et shaders contrôlés. Résultats détaillés : `build/placement-validation.json`.
+- Aucun test matériel ni installation sur Quest : poursuite sans casque selon la demande précédente. Restent à valider dans le casque : déplacement avec manettes/mains pendant la lecture ou la pause, maintien des vidéos mono/SBS/TB/180°/360° avec tous les filtres, masquage/rappel et comportement après un véritable changement de repère runtime.
+
+
 ## 0.4.3 — qualité du rendu avec upscalers (29 octobre 2026)
 
 - Deux défauts reproduits avant correction : FSR créait un liseré au bord transparent de la projection cinéma (écart maximal de 7 niveaux RGB) ; le calcul d'entrée réduisait inutilement le deuxième axe. Une mire 128×128 était réduite à 128×64 avant agrandissement horizontal et perdait toutes ses lignes alternées (contraste 0).

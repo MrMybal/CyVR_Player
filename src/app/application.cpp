@@ -366,7 +366,7 @@ bool PlayerApplication::action(int id) {
   else if (id >= 1040 && id <= 1042)
     projection = id - 1040;
   else if (id == 1050)
-    ui_.recenterRequested = true;
+    ++video_placement_request;
   else if (id == 1051)
     half_stereo = !half_stereo;
   else if (id == 1052)

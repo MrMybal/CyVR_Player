@@ -2,8 +2,10 @@
 #include "cyvr/player/android/video_renderer.hpp"
 #include "cyvr/player/locale.hpp"
 #include "cyvr/player/media.hpp"
+#include "cyvr/player/video_placement.hpp"
 #include <android/log.h>
 #include <cstring>
+#include <deque>
 #if CYVR_ENABLE_IMMERSIVE
 #include "cyvr/android_xr.hpp"
 #include <openxr/openxr_platform.h>
@@ -17,6 +19,11 @@ void xrCheck(XrResult result, const char *what) {
   if (XR_FAILED(result))
     throw std::runtime_error(std::string(what) + " / OpenXR " +
                              std::to_string(result));
+}
+Pose pose_from_xr(const XrPosef &pose) {
+  return {{pose.position.x, pose.position.y, pose.position.z},
+          {pose.orientation.x, pose.orientation.y, pose.orientation.z,
+           pose.orientation.w}};
 }
 #else
 using Base = AndroidRenderExtension;
@@ -53,6 +60,15 @@ class Renderer final : public Base {
   std::uint64_t measured_epoch_{UINT64_MAX}, measured_request_{UINT64_MAX};
 #if CYVR_ENABLE_IMMERSIVE
   AndroidXrContext xr_{};
+  VideoPlacement video_placement_;
+  XrSpace video_space_{};
+  std::uint64_t placed_request_{UINT64_MAX};
+  struct SpaceChange {
+    XrTime time;
+    bool valid;
+    Pose new_in_previous;
+  };
+  std::deque<SpaceChange> space_changes_;
   struct EyeTarget {
     XrSwapchain swapchain{};
     std::vector<VkImage> images;
@@ -382,6 +398,10 @@ public:
   }
   void xrReady(const AndroidXrContext &context) override {
     xr_ = context;
+    video_placement_.reset();
+    video_space_ = XR_NULL_HANDLE;
+    space_changes_.clear();
+    placed_request_ = UINT64_MAX;
     uint32_t count{};
     xrCheck(xrEnumerateViewConfigurationViews(
                 xr_.instance, xr_.system,
@@ -401,12 +421,26 @@ public:
       eye_extents_[i] = {views[i].recommendedImageRectWidth,
                          views[i].recommendedImageRectHeight};
   }
+  void referenceSpaceChanging(
+      const XrEventDataReferenceSpaceChangePending &change) override {
+    if (change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL &&
+        video_placement_.placed() && video_space_ == xr_.local)
+      space_changes_.push_back({change.changeTime, bool(change.poseValid),
+                                change.poseValid
+                                    ? pose_from_xr(change.poseInPreviousSpace)
+                                    : Pose {}});
+  }
   uint32_t compositionLayers(const AndroidXrFrame &frame,
                              const XrCompositionLayerBaseHeader **output,
                              uint32_t capacity) override {
     auto app = application_();
-    if (app && retained_ && app->session().state().ready &&
-        app->image.quality && failed_request_ != app->processing_request) {
+    if (!app)
+      return 0;
+    const auto media = app->session().state();
+    if (!media.ready || !place_video(frame, *app))
+      return 0;
+    if (retained_ && app->image.quality &&
+        failed_request_ != app->processing_request) {
       try {
         return projected_video(frame, output, capacity, *app);
       } catch (const std::exception &e) {
@@ -415,10 +449,7 @@ public:
         return 0;
       }
     }
-    if (!app || !initialized_ || !swapchain_)
-      return 0;
-    const auto media = app->session().state();
-    if (!media.ready)
+    if (!initialized_ || !swapchain_)
       return 0;
     const uint32_t count = app->stereo ? 2 : 1;
     if (count > capacity)
@@ -426,7 +457,7 @@ public:
     for (uint32_t eye = 0; eye < count; ++eye) {
       auto &q = quads_[eye];
       q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-      q.space = frame.panelSpace;
+      q.space = video_space_;
       q.eyeVisibility =
           app->stereo ? (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT)
                       : XR_EYE_VISIBILITY_BOTH;
@@ -442,11 +473,9 @@ public:
         rect.extent.height /= 2;
         rect.offset.y = packed * rect.extent.height;
       }
-      const auto p =
-          frame.panel.pose.position +
-          rotate(frame.panel.pose.orientation,
-                 {app->image.pan_x * 2, .1f - app->image.pan_y * 2, -2.15f});
-      const auto r = frame.panel.pose.orientation;
+      const auto pose = video_placement_.screen(app->image);
+      const auto p = pose.position;
+      const auto r = pose.orientation;
       q.pose = {{r.x, r.y, r.z, r.w}, { p.x, p.y, p.z }};
       const double par = app->half_stereo && app->stereo
                              ? (app->stereo == 1 ? 2. : .5)
@@ -515,6 +544,50 @@ private:
                         error);
   }
 #if CYVR_ENABLE_IMMERSIVE
+  bool place_video(const AndroidXrFrame &frame, PlayerApplication &app) {
+    while (!space_changes_.empty() &&
+           space_changes_.front().time <= frame.displayTime) {
+      const auto change = space_changes_.front();
+      space_changes_.pop_front();
+      if (video_space_ == xr_.local && change.valid)
+        video_placement_.transform(inverse_pose(change.new_in_previous));
+    }
+    const XrSpace preferred =
+        frame.panelSpace == xr_.view ? xr_.view : xr_.local;
+    constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                           XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    if (video_placement_.placed() && video_space_ == xr_.view &&
+        preferred == xr_.local) {
+      XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+      if (XR_SUCCEEDED(xrLocateSpace(xr_.view, xr_.local, frame.displayTime,
+                                     &location)) &&
+          (location.locationFlags & valid) == valid) {
+        video_placement_.transform(pose_from_xr(location.pose));
+        video_space_ = xr_.local;
+      }
+    }
+    if (!video_placement_.placed() ||
+        placed_request_ != app.video_placement_request) {
+      Pose head;
+      if (preferred != xr_.view) {
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+        if (XR_FAILED(xrLocateSpace(xr_.view, preferred, frame.displayTime,
+                                    &location)) ||
+            (location.locationFlags & valid) != valid)
+          return video_placement_.placed();
+        head = pose_from_xr(location.pose);
+      }
+      video_placement_.place(head, last_ui().settings.distance);
+      video_space_ = preferred;
+      placed_request_ = app.video_placement_request;
+      __android_log_print(
+          ANDROID_LOG_INFO, "CyVRPlayer",
+          "VIDEO_PLACED independent_panel=1 space=%s request=%llu",
+          video_space_ == xr_.view ? "view" : "local",
+          static_cast<unsigned long long>(placed_request_));
+    }
+    return video_placement_.placed();
+  }
   void destroy_enhanced() {
     for (auto &eye : enhanced_) {
       eye.renderer.reset();
@@ -581,7 +654,7 @@ private:
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
     locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     locate.displayTime = frame.displayTime;
-    locate.space = frame.panelSpace;
+    locate.space = video_space_;
     XrViewState state{XR_TYPE_VIEW_STATE};
     uint32_t count{};
     xrCheck(
@@ -592,7 +665,7 @@ private:
     // The shared host can explicitly place its scene in VIEW space before
     // tracking is available. Keep that head-relative fallback usable too.
     if (!(state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
-      if (frame.panelSpace != xr_.view)
+      if (video_space_ != xr_.view)
         return 0;
       for (auto &view : views)
         view.pose = {{0, 0, 0, 1}, {0, 0, 0}};
@@ -606,11 +679,9 @@ private:
           view.fov.angleUp <= view.fov.angleDown)
         return 0;
     const auto media = app.session().state();
-    const auto videoPosition =
-        frame.panel.pose.position +
-        rotate(frame.panel.pose.orientation,
-               {app.image.pan_x * 2, .1f - app.image.pan_y * 2, -2.15f});
-    const auto inverse = inverse_rotation(frame.panel.pose.orientation);
+    const auto videoPose = video_placement_.screen(app.image);
+    const auto videoPosition = videoPose.position;
+    const auto inverse = inverse_rotation(videoPose.orientation);
     const double par = app.half_stereo && app.stereo
                            ? (app.stereo == 1 ? 2. : .5)
                            : media.pixel_aspect;
@@ -702,7 +773,7 @@ private:
                                         int32_t(eye.output.height) }};
     }
     enhanced_layer_ = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    enhanced_layer_.space = frame.panelSpace;
+    enhanced_layer_.space = video_space_;
     enhanced_layer_.layerFlags =
         XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
         XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;

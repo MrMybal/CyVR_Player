@@ -49,3 +49,10 @@ The player now uses `DrawList::video()` and `VulkanRenderer::setVideoTexture()` 
 ### Player performance hooks (0.4.2)
 
 The local foundation also exposes `UiModel::renderApplicationDebug` for the player's shared video/render HUD, and `AndroidRenderExtension::frameSubmitted()` after a successful panel present or a nonempty OpenXR frame end. Neither hook equates submission to physical compositor display. The optional Vulkan query entry points are loaded with the existing device functions. Keep these small local hooks when updating the foundation.
+
+
+## Independent immersive video placement (0.4.4)
+
+The player no longer derives cinema/panorama position or orientation from `AndroidXrFrame::panel.pose`. `VideoPlacement` captures a separate placement from the current head pose. Native quad/equirect layers and enhanced per-eye projection share that placement and reference space. Panel drag, release-facing rotation, follow, hide/reveal and filter resource recreation do not update it. Action 1050 increments an application video-placement request instead of setting the host's panel recenter flag. The explicit recenter uses the current view and keeps the controls panel where the user placed it.
+
+The local foundation forwards `XrEventDataReferenceSpaceChangePending` through the optional `AndroidXrRenderExtension::referenceSpaceChanging()` hook. The player applies a known LOCAL-origin transform at its reported change time. A VIEW-relative startup placement is transformed into LOCAL coordinates once tracking is valid, rather than adopting the newly recentered UI pose. See [the OpenXR reference-space change definition](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrEventDataReferenceSpaceChangePending.html). Unknown runtime-origin deltas cannot guarantee preservation of a physical room position. Scene placement is transient and is recreated when the immersive host is replaced; no persistent spatial-anchor service was added.

@@ -36,7 +36,8 @@ def configure(target,immersive=True):
     return directory
 def notices(destination):
     destination.mkdir(parents=True,exist_ok=True)
-    for name,source in [('CyVR_UI-MIT.txt',UI/'LICENSE'),('CyVR_UI-THIRD_PARTY.md',UI/'THIRD_PARTY.md')]:shutil.copyfile(source,destination/name)
+    for name,source in [('CyVR_Player-GPLv3.txt',ROOT/'LICENSE'),('CyVR_Player-NOTICE.txt',ROOT/'NOTICE'),
+            ('CyVR_UI-MIT.txt',UI/'LICENSE'),('CyVR_UI-THIRD_PARTY.md',UI/'THIRD_PARTY.md')]:shutil.copyfile(source,destination/name)
     for name,source in [('FFmpeg-LGPLv3.txt',ROOT/'.deps/ffmpeg/source/COPYING.LGPLv3'),
             ('FFmpeg-GPLv3-terms.txt',ROOT/'.deps/ffmpeg/source/COPYING.GPLv3'),
             ('MbedTLS-Apache-2.0.txt',ROOT/'.deps/mbedtls/source/LICENSE'),

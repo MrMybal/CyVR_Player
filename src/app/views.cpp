@@ -335,7 +335,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                : i == 1 ? "VR 180°"
                         : "Panorama 360°",
                projection == i, i == 0 || platform_.panorama);
-      button(d, 1050, {36, 652, 444, 68}, "Recenter screen", false, immersive);
+      button(d, 1050, {36, 652, 444, 68}, "Recenter video", false, immersive);
       button(d, 1051, {494, 652, 444, 68}, "Half-resolution 3D", half_stereo,
              stereo != 0);
       button(d, 1052, {952, 652, 452, 68}, "Swap eyes", swap_eyes, stereo != 0);
@@ -345,6 +345,10 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       button(d, 1333, {498, 758, 250, 60}, "Fit image");
       d.text(36, 847, 21, tr("Left stick: seek 10 s / Right stick: zoom"),
              muted);
+      if (immersive)
+        d.text(36, 884, 20,
+               tr("Move the controls freely; the video stays in place."),
+               muted);
     } else if (display_tab_ == 1) {
       slider(1340, 330, "Exposure (EV)", image.exposure, -2, 2);
       slider(1341, 398, "Contrast", image.contrast, .5f, 1.5f);

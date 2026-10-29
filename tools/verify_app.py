@@ -32,9 +32,12 @@ def main():
                 'assets/font_atlas.bin','assets/hand_studio.bin','assets/ui.vert.spv','assets/ui.frag.spv',
                 'assets/glass.frag.spv','assets/environment.vert.spv','assets/environment.frag.spv',
                 'assets/spatial.vert.spv','assets/spatial.frag.spv',
+                'assets/licenses/CyVR_Player-GPLv3.txt','assets/licenses/CyVR_Player-NOTICE.txt',
                 'assets/licenses/CyVR_UI-MIT.txt','assets/licenses/FFmpeg-LGPLv3.txt','assets/licenses/MbedTLS-Apache-2.0.txt',
                 'assets/licenses/third_party_gsr1_LICENSE']:
             assert required in names,required
+        for packaged,source in [('CyVR_Player-GPLv3.txt','LICENSE'),('CyVR_Player-NOTICE.txt','NOTICE')]:
+            assert archive.read('assets/licenses/'+packaged)==(ROOT/source).read_bytes(),packaged
         for item in archive.infolist():
             if not item.filename.endswith('.so'):continue
             data=archive.read(item)

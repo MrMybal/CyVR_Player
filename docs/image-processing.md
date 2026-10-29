@@ -1,6 +1,6 @@
 # Image processing and browser previews
 
-Version 0.4.3 keeps video decoding in MediaCodec and rendering in Vulkan. No new proprietary SDK, CPU readback in playback, temporal reconstruction or generated frames were added.
+Version 0.4.4 keeps video decoding in MediaCodec and rendering in Vulkan. No new proprietary SDK, CPU readback in playback, temporal reconstruction or generated frames were added.
 
 ## Processing paths
 
@@ -46,7 +46,7 @@ GSR 2 was reviewed but not integrated: its documented color/depth/velocity/histo
 
 ## Reproducible checks
 
-`build_app.py --target windows` runs five CTest suites. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (134 cases, including pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
+`build_app.py --target windows` runs six CTest suites. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (134 cases, including pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
 
 ```powershell
 build/app-windows/cyvr_image_probe.exe build/app-windows/assets --benchmark

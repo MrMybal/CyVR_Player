@@ -39,7 +39,6 @@
   "3D top / bottom (TB)": "3D haut / bas (TB)",
   "Projection": "Projection",
   "Cinema screen": "Écran de cinéma",
-  "Recenter screen": "Recentrer l’écran",
   "Half-resolution 3D": "3D demi-résolution",
   "Swap eyes": "Inverser les yeux",
   "Immersive mode uses native OpenXR layers for the video.": "Le mode immersif utilise des couches OpenXR natives pour la vidéo.",
@@ -116,5 +115,7 @@
   "Video: distinct frames; VR redraws are separate.": "Vidéo : images distinctes, hors répétitions VR.",
   "Submissions do not measure compositor display.": "Soumissions : affichage compositeur non mesuré.",
   "GPU: video passes, both eyes in VR; excludes UI.": "GPU : vidéo, deux yeux en VR, hors interface.",
-  "Close with the Performance button or HUD key.": "Fermer : bouton Performances ou touche HUD."
+  "Close with the Performance button or HUD key.": "Fermer : bouton Performances ou touche HUD.",
+  "Recenter video": "Recentrer la vidéo",
+  "Move the controls freely; the video stays in place.": "Déplacez les commandes librement : la vidéo reste en place."
 }

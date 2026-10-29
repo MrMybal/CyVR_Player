@@ -81,6 +81,7 @@ public:
   bool processing_active{};
   std::string processing_status;
   std::uint64_t processing_request{};
+  std::uint64_t video_placement_request{};
   RenderMonitor render_monitor;
   PlayerSession &session() { return session_; }
   int stereo{};     // mono, SBS, top/bottom
