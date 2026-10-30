@@ -46,7 +46,7 @@ GSR 2 was reviewed but not integrated: its documented color/depth/velocity/histo
 
 ## Reproducible checks
 
-`build_app.py --target windows` runs six CTest suites. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (134 cases, including pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
+`build_app.py --target windows` runs seven CTest suites. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (174 cases, including pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
 
 ```powershell
 build/app-windows/cyvr_image_probe.exe build/app-windows/assets --benchmark
@@ -64,3 +64,7 @@ The optional benchmark records filter-only wall time (including CPU submission/f
 The new RGB projection probe executes the same `video.frag` SPIR-V and shared 128-byte `VideoPush` layout used by Android before the real filter passes, with encoded UNORM fixture input and sRGB reconstruction attachments. It covers both eyes in SBS/TB, single-eye 2D views, flat cinema, front/rear 180° and 360°, alpha coverage, orientation, and neutral BT.709-to-sRGB transfer. This is GPU shader validation on the PC, not a validation of Android AHB import or OpenXR compositor presentation.
 
 Two failures were reproduced before fixing them: FSR changed a constant cinema video's edge color by up to 7 byte levels, and horizontal-only reconstruction reduced a 128×128 source to 128×64, erasing alternating vertical detail (measured contrast 0). The corrected path retains all 128 source rows. The regression requires retained contrast for both FSR and GSR, and unchanged constant colors within visible projected edges. Headset-specific visual/performance qualification remains necessary.
+
+### 0.4.5 HDR and Gaussian integration
+
+PQ and HLG are linearized and tone mapped into SDR sRGB before reconstruction. Forty additional GPU reference checks compare five input levels for both transfers through Native/CAS/FSR/GSR, including finite/monotonic output. These shader checks do not certify Android ten-bit import or Quest panel colour. Gaussian per-eye targets use the same postprocessor and full runtime target dimensions; synthetic Vulkan visibility/sorting/rasterization and stereo camera translation are tested separately.

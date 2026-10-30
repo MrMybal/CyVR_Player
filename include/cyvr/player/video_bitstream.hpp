@@ -1,10 +1,12 @@
 #pragma once
 #include "cyvr/player/demuxer.hpp"
+#include "cyvr/player/video_color.hpp"
 
 namespace cyvr::player {
 struct VideoConfiguration {
     std::string mime;
     int width=0,height=0;
+    VideoColor color;
     // Android csd-0, csd-1... AVC: SPS/PPS separate; HEVC: VPS/SPS/PPS combined.
     std::vector<std::vector<std::uint8_t>> codec_data;
 };

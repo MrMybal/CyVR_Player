@@ -105,6 +105,53 @@
       "url": "https://repo.msys2.org/msys/x86_64/make-4.4.1-2-x86_64.pkg.tar.zst",
       "archive": ".deps/downloads/make-4.4.1-2-x86_64.pkg.tar.zst",
       "sha256": "2408af61717dae87b00c855b132769a125c708907fc94a46bb16dae076113e5c"
+    },
+    {
+      "name": "Subtitle source: libass",
+      "version": "0.17.4",
+      "license": "ISC",
+      "archive": ".deps/downloads/libass-0.17.4.tar.gz",
+      "url": "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.4",
+      "sha256": "c287d180d93dc9c9021872574b618ac49027e84cc90e1289318b1ee68bb42251"
+    },
+    {
+      "name": "Subtitle source: freetype",
+      "version": "VER-2-14-1",
+      "license": "FTL",
+      "archive": ".deps/downloads/freetype-VER-2-14-1.tar.gz",
+      "url": "https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-14-1",
+      "sha256": "44bd69d1f0750603410cfd4f26f1c5523c5a3a087a2dfa8639b757dc7c6677be"
+    },
+    {
+      "name": "Subtitle source: fribidi",
+      "version": "v1.0.16",
+      "license": "LGPL-2.1-or-later",
+      "archive": ".deps/downloads/fribidi-v1.0.16.tar.gz",
+      "url": "https://codeload.github.com/fribidi/fribidi/tar.gz/refs/tags/v1.0.16",
+      "sha256": "5a1d187a33daa58fcee2ad77f0eb9d136dd6fa4096239199ba31e850d397e8a8"
+    },
+    {
+      "name": "Subtitle source: harfbuzz",
+      "version": "11.2.1",
+      "license": "MIT",
+      "archive": ".deps/downloads/harfbuzz-11.2.1.tar.gz",
+      "url": "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/11.2.1",
+      "sha256": "057d5754c3ac0c499bbf4d729d52acf134c7bb4ba8868ba22e84ae96bc272816"
+    },
+    {
+      "name": "SplatKit Vulkan source",
+      "archive": ".deps/downloads/splatkit-e67526e2ae1b64d474275208639c1a1015c843b8.tar.gz",
+      "license": "MIT",
+      "commit": "e67526e2ae1b64d474275208639c1a1015c843b8",
+      "url": "https://codeload.github.com/Xget7/splatkit/tar.gz/e67526e2ae1b64d474275208639c1a1015c843b8",
+      "sha256": "80dd9ad9033e8e28b74edf10ce97e4f180a4491571fef0d49cf0a24a8852345c"
+    },
+    {
+      "name": "VulkanMemoryAllocator source",
+      "archive": ".deps/downloads/vma-3.2.1.tar.gz",
+      "license": "MIT",
+      "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/tar.gz/refs/tags/v3.2.1",
+      "sha256": "5e7749504cb802427ffb7bec38a0b6a15db46ae253f00560acb3e624d9fe695c"
     }
   ]
 }

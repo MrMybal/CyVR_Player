@@ -191,13 +191,15 @@ int main() {
       state.image.quality = 2;
       state.image.zoom = 2.25f;
       state.display_tab = 2;
+      state.tracks={3,5,8,"content://test/document/captions"};
+      state.tracks_open=true;state.track_tab=2;state.track_offset=7;
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
       if (!loaded || loaded->source != state.source ||
           loaded->position_us != 1234567 || loaded->playing ||
           loaded->parents != state.parents || loaded->image != state.image ||
-          loaded->display_tab != 2)
+          loaded->display_tab != 2 || loaded->tracks.video!=3 || loaded->tracks.audio!=5 || loaded->tracks.subtitle!=8 || loaded->tracks.external_subtitle!=state.tracks.external_subtitle || !loaded->tracks_open || loaded->track_tab!=2 || loaded->track_offset!=7)
         throw std::runtime_error(
             "Document or paused position lost during state transfer");
       // Previous app versions wrote the same base record without the optional
@@ -205,7 +207,9 @@ int main() {
       {
         std::ifstream f(platform.state_file, std::ios::binary);
         std::string bytes(std::istreambuf_iterator<char>(f), {});
-        bytes.resize(bytes.size() - 96);
+        const auto extension=bytes.find(std::string("2GMI\0\0\0\0",8));
+        if(extension==std::string::npos)throw std::runtime_error("Image extension missing from state fixture");
+        bytes.resize(extension);
         f.close();
         std::ofstream old(platform.state_file,
                           std::ios::binary | std::ios::trunc);

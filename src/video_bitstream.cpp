@@ -1,7 +1,9 @@
 #include "cyvr/player/video_bitstream.hpp"
+#include <algorithm>
 extern "C" {
 #include <libavcodec/bsf.h>
 #include <libavutil/error.h>
+#include <libavutil/mastering_display_metadata.h>
 }
 
 namespace cyvr::player {
@@ -27,8 +29,8 @@ void append(std::vector<std::uint8_t>& target,const std::uint8_t* begin,const st
 struct VideoBitstream::Impl {
     AVBSFContext* filter=nullptr;
     VideoConfiguration configuration;
-    bool avc=false,vps=false,sps=false,pps=false;
-    bool ready() const noexcept {return sps&&pps&&(avc||vps);}
+    bool avc=false,vps=false,sps=false,pps=false,annex=true;
+    bool ready() const noexcept {return !annex || (sps&&pps&&(avc||vps));}
     void collect(const std::uint8_t* data,std::size_t size){
         const bool had_vps=vps,had_sps=sps,had_pps=pps;
         auto& config=configuration;
@@ -55,20 +57,43 @@ VideoBitstream::VideoBitstream(const Demuxer& source,int stream) : impl_(std::ma
     const bool avc=parameters->codec_id==AV_CODEC_ID_H264;
     const bool hevc=parameters->codec_id==AV_CODEC_ID_HEVC;
     impl_->avc=avc;
-    if(!avc && !hevc) throw MediaError("Current native hardware bridge accepts AVC and HEVC");
-    const auto* filter=av_bsf_get_by_name(avc ? "h264_mp4toannexb" : "hevc_mp4toannexb");
+    impl_->annex=avc||hevc;
+    const auto* filter=av_bsf_get_by_name(avc ? "h264_mp4toannexb" : hevc ? "hevc_mp4toannexb" : "null");
     if(!filter) throw MediaError("Annex B filter is absent from this FFmpeg build");
     check(av_bsf_alloc(filter,&impl_->filter),"Create bitstream filter");
     check(avcodec_parameters_copy(impl_->filter->par_in,parameters),"Copy codec parameters");
     impl_->filter->time_base_in={source.time_base_numerator(stream),source.time_base_denominator(stream)};
     check(av_bsf_init(impl_->filter),"Initialize bitstream filter");
     auto& config=impl_->configuration;
-    config.mime=avc ? "video/avc" : "video/hevc";
+    switch(parameters->codec_id){
+    case AV_CODEC_ID_H264:config.mime="video/avc";break;
+    case AV_CODEC_ID_HEVC:config.mime="video/hevc";break;
+    case AV_CODEC_ID_VP9:config.mime="video/x-vnd.on2.vp9";break;
+    case AV_CODEC_ID_VP8:config.mime="video/x-vnd.on2.vp8";break;
+    case AV_CODEC_ID_AV1:config.mime="video/av01";break;
+    case AV_CODEC_ID_MPEG2VIDEO:config.mime="video/mpeg2";break;
+    case AV_CODEC_ID_MPEG4:config.mime="video/mp4v-es";break;
+    case AV_CODEC_ID_H263:config.mime="video/3gpp";break;
+    case AV_CODEC_ID_MJPEG:config.mime="video/mjpeg";break;
+    default:break;
+    }
     config.width=parameters->width;config.height=parameters->height;
-    config.codec_data.resize(avc ? 2 : 1);
+    config.color.standard=parameters->color_primaries==AVCOL_PRI_BT2020 || parameters->color_space==AVCOL_SPC_BT2020_NCL || parameters->color_space==AVCOL_SPC_BT2020_CL ? 6 : 1;
+    config.color.transfer=parameters->color_trc==AVCOL_TRC_SMPTE2084 ? 6 : parameters->color_trc==AVCOL_TRC_ARIB_STD_B67 ? 7 : parameters->color_trc==AVCOL_TRC_LINEAR ? 1 : 3;
+    config.color.range=parameters->color_range==AVCOL_RANGE_JPEG ? 1 : parameters->color_range==AVCOL_RANGE_MPEG ? 2 : 0;
+    if(const auto* side=av_packet_side_data_get(parameters->coded_side_data,parameters->nb_coded_side_data,AV_PKT_DATA_MASTERING_DISPLAY_METADATA)){
+        if(side->size>=sizeof(AVMasteringDisplayMetadata)){
+            const auto* hdr=reinterpret_cast<const AVMasteringDisplayMetadata*>(side->data);
+            if(hdr->has_luminance && hdr->max_luminance.den>0)config.color.peak_nits=float(av_q2d(hdr->max_luminance));
+        }
+    }
+    config.color.peak_nits=std::clamp(config.color.peak_nits,203.f,10000.f);
+    if(impl_->annex)config.codec_data.resize(avc ? 2 : 1);
     const auto* data=impl_->filter->par_out->extradata;
-    if(data&&impl_->filter->par_out->extradata_size>0)
-        impl_->collect(data,std::size_t(impl_->filter->par_out->extradata_size));
+    if(data&&impl_->filter->par_out->extradata_size>0){
+        if(impl_->annex)impl_->collect(data,std::size_t(impl_->filter->par_out->extradata_size));
+        else config.codec_data.emplace_back(data,data+impl_->filter->par_out->extradata_size);
+    }
 }
 VideoBitstream::~VideoBitstream()=default;
 const VideoConfiguration& VideoBitstream::configuration() const noexcept {return impl_->configuration;}

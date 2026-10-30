@@ -3,6 +3,8 @@
 #include "cyvr/player/locale.hpp"
 #include "cyvr/player/media.hpp"
 #include "cyvr/player/video_placement.hpp"
+#include "cyvr/player/subtitle_rasterizer.hpp"
+#include "cyvr/player/splat_renderer.hpp"
 #include <android/log.h>
 #include <cstring>
 #include <deque>
@@ -58,6 +60,15 @@ class Renderer final : public Base {
   std::uint64_t failed_request_{UINT64_MAX};
   double last_report_{};
   std::uint64_t measured_epoch_{UINT64_MAX}, measured_request_{UINT64_MAX};
+  std::unique_ptr<SubtitleRasterizer> captions_;
+  std::unique_ptr<VulkanRenderer> caption_renderer_;
+  bool caption_visible_{};
+  int caption_width_{},caption_height_{};
+  std::weak_ptr<const SubtitleConfig> failed_caption_;
+  std::unique_ptr<SplatRenderer> splat_renderer_;
+  std::shared_ptr<const splat::SplatCloud> rendered_splat_;
+  std::shared_ptr<const splat::SplatCloud> failed_splat_;
+  ImageSettings failed_splat_settings_;
 #if CYVR_ENABLE_IMMERSIVE
   AndroidXrContext xr_{};
   VideoPlacement video_placement_;
@@ -85,6 +96,11 @@ class Renderer final : public Base {
   std::vector<VkImage> images_;
   std::array<XrCompositionLayerQuad, 2> quads_{};
   std::array<XrCompositionLayerEquirect2KHR, 2> spheres_{};
+  XrSwapchain caption_swapchain_{};
+  std::vector<Target> caption_targets_;
+  XrCompositionLayerQuad caption_quad_{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  struct GaussianEye{XrSwapchain swapchain{};std::vector<VkImage> images;VideoExtent extent{};};
+  std::array<GaussianEye,2> gaussian_eyes_;
 #endif
 public:
   Renderer(std::function<PlayerApplication *()> application, bool immersive)
@@ -154,6 +170,7 @@ public:
       if (auto app = application_())
         app->preview_ready = true;
     }
+    if(caption_renderer_ && caption_visible_)renderer.setOverlayTexture(caption_renderer_->imageAtlasView(),caption_renderer_->imageSampler());
   }
   void graphicsStopping(bool deviceStopping) override {
     if (!deviceStopping) {
@@ -165,7 +182,9 @@ public:
     vkDeviceWaitIdle(gpu_->device);
     if (uiRenderer_)
       uiRenderer_->setVideoTexture();
+    destroy_splats();
     destroyVideo();
+    destroy_captions();
     retained_ = {};
     if (sampler_)
       vkDestroySampler(gpu_->device, sampler_, nullptr);
@@ -230,11 +249,21 @@ public:
     }
     auto state = app->session().state();
     if (!state.ready) {
+      app->caption_ready=false;caption_visible_=false;
+      if(splat_renderer_ || failed_splat_ || rendered_splat_)destroy_splats();
+      bool video_resources=bool(video_) || bool(texture_);
+#if CYVR_ENABLE_IMMERSIVE
+      video_resources=video_resources || bool(swapchain_) || bool(enhanced_[0].renderer);
+#endif
+      if(video_resources) {vkDeviceWaitIdle(gpu_->device);destroyVideo();}
       app->preview_ready = false;
       initialized_ = false;
       retained_ = {};
       return false;
     }
+    update_captions(*app,ui,state);
+    if(state.volumetric)return immersive_?false:gaussian_panel(*app,ui);
+    if(splat_renderer_ || failed_splat_ || rendered_splat_)destroy_splats();
     auto image = app->session().take_frame();
     const bool new_frame = bool(image);
     if (image)
@@ -431,8 +460,29 @@ public:
                                     : Pose {}});
   }
   uint32_t compositionLayers(const AndroidXrFrame &frame,
+                              const XrCompositionLayerBaseHeader **output,
+                              uint32_t capacity) override {
+    auto app=application_();
+    if(app && app->session().state().volumetric){try{return gaussian_layers(frame,output,capacity,*app);}catch(const std::exception& e){++app->render_monitor.errors;failed_splat_=app->session().splats().cloud;failed_splat_settings_=app->image;app->session().pause(true);app->show_interface();last_ui().setToast(e.what());return 0;}}
+    auto count=video_layers(frame,output,capacity);
+    if(app && caption_visible_ && caption_swapchain_ && count<capacity && video_placement_.placed()){
+      const auto media=app->session().state();
+      auto pose=video_placement_.screen(app->image);
+      if(app->projection)pose=video_placement_.screen(ImageSettings{});
+      pose.position=pose.position+rotate(pose.orientation,{0,0,.01f});
+      auto& q=caption_quad_;q={XR_TYPE_COMPOSITION_LAYER_QUAD};q.space=video_space_;
+      q.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+      q.eyeVisibility=XR_EYE_VISIBILITY_BOTH;q.subImage.swapchain=caption_swapchain_;
+      q.subImage.imageRect={{0,0},{caption_width_,caption_height_}};
+      q.pose={{pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w},{pose.position.x,pose.position.y,pose.position.z}};
+      q.size={app->projection?4.f:4.f*app->image.zoom,(app->projection?4.f:4.f*app->image.zoom)*float(caption_height_)/caption_width_};
+      output[count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&q);
+    }
+    return count;
+  }
+  uint32_t video_layers(const AndroidXrFrame &frame,
                              const XrCompositionLayerBaseHeader **output,
-                             uint32_t capacity) override {
+                             uint32_t capacity) {
     auto app = application_();
     if (!app)
       return 0;
@@ -505,6 +555,112 @@ public:
   }
 #endif
 private:
+  void destroy_splats(){
+    splat_renderer_.reset();rendered_splat_.reset();failed_splat_.reset();
+#if CYVR_ENABLE_IMMERSIVE
+    for(auto& eye:gaussian_eyes_){if(eye.swapchain)xrDestroySwapchain(eye.swapchain);eye={};}
+#endif
+  }
+  bool gaussian_panel(PlayerApplication& app,UiModel& ui){
+    const auto snapshot=app.session().splats();if(!snapshot.cloud)return false;
+    if(failed_splat_==snapshot.cloud && failed_splat_settings_==app.image)return false;
+    const float scale=std::min(ui.viewportSize.x/1440,ui.viewportSize.y/990);
+    const float w=ui.interfaceHidden?ui.viewportSize.x:900*scale,h=ui.interfaceHidden?ui.viewportSize.y:506*scale;
+    const VideoExtent display{uint32_t(std::max(1.f,std::min(w,h*16/9))),uint32_t(std::max(1.f,std::min(h,w*9/16)))};
+    const auto plan=view_processing_plan(display,display,app.image);
+    if(rendered_splat_==snapshot.cloud && initialized_ && rendered_image_==app.image && width_==plan.output.width && height_==plan.output.height)return false;
+    try{
+      if(width_!=plan.output.width || height_!=plan.output.height || !texture_){splat_renderer_.reset();createVideo(plan.output.width,plan.output.height);}
+      if(!splat_renderer_)splat_renderer_=std::make_unique<SplatRenderer>(*gpu_,format_,assets_);
+      Pose camera{{-app.image.pan_x*2,app.image.pan_y*2,3.5f/app.image.zoom},{}};
+      splat_renderer_->draw(texture_,plan.output,snapshot,camera,{-1,1,9.f/16,-9.f/16},app.image,true);
+      if(uiRenderer_)uiRenderer_->setVideoTexture(textureView_,sampler_);
+      app.preview_ready=true;app.preview_is_view=true;app.processing_active=app.image.quality!=0;
+      rendered_splat_=snapshot.cloud;rendered_image_=app.image;initialized_=true;app.session().frame_submitted(snapshot.epoch,snapshot.pts_us);ui.invalidate();return true;
+    }catch(const std::exception& e){++app.render_monitor.errors;failed_splat_=snapshot.cloud;failed_splat_settings_=app.image;app.session().pause(true);app.show_interface();ui.setToast(e.what());app.preview_ready=false;return false;}
+  }
+#if CYVR_ENABLE_IMMERSIVE
+  uint32_t gaussian_layers(const AndroidXrFrame& frame,const XrCompositionLayerBaseHeader** output,uint32_t capacity,PlayerApplication& app){
+    const auto snapshot=app.session().splats();if(!capacity || !snapshot.cloud || !place_video(frame,app))return 0;
+    if(failed_splat_==snapshot.cloud && failed_splat_settings_==app.image)return 0;
+    std::array<XrView,2> views{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};locate.viewConfigurationType=XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;locate.displayTime=frame.displayTime;locate.space=video_space_;XrViewState state{XR_TYPE_VIEW_STATE};uint32_t count{};
+    xrCheck(xrLocateViews(xr_.session,&locate,&state,2,&count,views.data()),"locate Gaussian views");if(count!=2 || !(state.viewStateFlags&XR_VIEW_STATE_ORIENTATION_VALID_BIT))return 0;
+    const VideoExtent native{std::max(eye_extents_[0].width,eye_extents_[1].width),std::max(eye_extents_[0].height,eye_extents_[1].height)};const auto plan=view_processing_plan(native,native,app.image);
+    if(std::any_of(gaussian_eyes_.begin(),gaussian_eyes_.end(),[&](const auto& eye){return !eye.swapchain || eye.extent.width!=plan.output.width || eye.extent.height!=plan.output.height;})){vkDeviceWaitIdle(gpu_->device);destroy_splats();}
+    if(!splat_renderer_)splat_renderer_=std::make_unique<SplatRenderer>(*gpu_,format_,assets_);
+    const auto model=video_placement_.screen(app.image);const auto inverse=inverse_rotation(model.orientation);
+    for(int n=0;n<2;++n){auto& eye=gaussian_eyes_[n];
+      if(!eye.swapchain || eye.extent.width!=plan.output.width || eye.extent.height!=plan.output.height){
+        vkDeviceWaitIdle(gpu_->device);if(eye.swapchain)xrDestroySwapchain(eye.swapchain);eye={};
+        XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_SAMPLED_BIT;info.format=format_;info.width=plan.output.width;info.height=plan.output.height;info.sampleCount=info.faceCount=info.arraySize=info.mipCount=1;
+        xrCheck(xrCreateSwapchain(xr_.session,&info,&eye.swapchain),"create Gaussian eye");uint32_t images{};xrCheck(xrEnumerateSwapchainImages(eye.swapchain,0,&images,nullptr),"Gaussian image count");std::vector<XrSwapchainImageVulkanKHR> targets(images,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});xrCheck(xrEnumerateSwapchainImages(eye.swapchain,images,&images,reinterpret_cast<XrSwapchainImageBaseHeader*>(targets.data())),"Gaussian images");for(auto& image:targets)eye.images.push_back(image.image);eye.extent=plan.output;
+      }
+      const auto& v=views[n];Pose camera;camera.position=rotate(inverse,Vec3{v.pose.position.x,v.pose.position.y,v.pose.position.z}-model.position)*(1.f/app.image.zoom);camera.orientation=multiply_rotation(inverse,{v.pose.orientation.x,v.pose.orientation.y,v.pose.orientation.z,v.pose.orientation.w});
+      uint32_t index{};XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};xrCheck(xrAcquireSwapchainImage(eye.swapchain,&acquire,&index),"acquire Gaussian eye");XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=XR_INFINITE_DURATION;xrCheck(xrWaitSwapchainImage(eye.swapchain,&wait),"wait Gaussian eye");
+      try{splat_renderer_->draw(eye.images.at(index),eye.extent,snapshot,camera,{std::tan(v.fov.angleLeft),std::tan(v.fov.angleRight),std::tan(v.fov.angleUp),std::tan(v.fov.angleDown)},app.image,false);}catch(...){XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrReleaseSwapchainImage(eye.swapchain,&release);throw;}
+      XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrCheck(xrReleaseSwapchainImage(eye.swapchain,&release),"release Gaussian eye");auto& projected=enhanced_views_[n];projected={XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};projected.pose=v.pose;projected.fov=v.fov;projected.subImage.swapchain=eye.swapchain;projected.subImage.imageRect={{0,0},{int32_t(eye.extent.width),int32_t(eye.extent.height)}};
+    }
+    enhanced_layer_={XR_TYPE_COMPOSITION_LAYER_PROJECTION};enhanced_layer_.space=video_space_;enhanced_layer_.viewCount=2;enhanced_layer_.views=enhanced_views_.data();output[0]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&enhanced_layer_);
+    app.session().frame_submitted(snapshot.epoch,snapshot.pts_us);return 1;
+  }
+#endif
+  void destroy_captions(){
+    if(uiRenderer_)uiRenderer_->setOverlayTexture();
+#if CYVR_ENABLE_IMMERSIVE
+    if(caption_renderer_)for(auto& target:caption_targets_)caption_renderer_->destroyTarget(target);
+    caption_targets_.clear();
+    if(caption_swapchain_)xrDestroySwapchain(caption_swapchain_);
+    caption_swapchain_=XR_NULL_HANDLE;
+#endif
+    caption_renderer_.reset();captions_.reset();caption_visible_=false;
+  }
+  void update_captions(PlayerApplication& app,UiModel& ui,const PlayerState& state){
+    const auto snapshot=app.session().subtitles();
+    if(auto failed=failed_caption_.lock();failed && failed==snapshot.config)return;
+    if(!captions_ && !snapshot.config){app.caption_ready=false;caption_visible_=false;return;}
+    try{
+      if(!captions_)captions_=std::make_unique<SubtitleRasterizer>(assets_("subtitle-font.ttf"));
+      int width=std::max(1920,int(ui.viewportSize.x));
+#if CYVR_ENABLE_IMMERSIVE
+      if(immersive_)width=int(eye_extents_[0].width);
+#endif
+      width=std::clamp(width,1024,4096);
+      const double par=app.half_stereo && app.stereo?(app.stereo==1?2.:.5):state.pixel_aspect;
+      const double aspect=app.projection?16./9:eye_aspect(state.width,state.height,StereoLayout(app.stereo),par);
+      const int height=std::clamp(int(std::lround(width/std::max(.25,aspect))),256,4096);
+      auto image=captions_->render(snapshot,width,height);
+      if(!image)return;
+      caption_visible_=!image->rgba.empty();app.caption_ready=caption_visible_;
+      ui.invalidate();
+      if(!caption_visible_)return;
+      if(!caption_renderer_){caption_renderer_=std::make_unique<VulkanRenderer>(*gpu_);caption_renderer_->initialize(format_,assets_);}
+      caption_renderer_->uploadImages(image->width,image->height,image->rgba);
+      app.caption_rect={float(image->x)/width,float(image->y)/height,float(image->width)/width,float(image->height)/height};
+      if(uiRenderer_)uiRenderer_->setOverlayTexture(caption_renderer_->imageAtlasView(),caption_renderer_->imageSampler());
+#if CYVR_ENABLE_IMMERSIVE
+      if(immersive_){
+        if(!caption_swapchain_ || caption_width_!=width || caption_height_!=height){
+          vkDeviceWaitIdle(gpu_->device);
+          for(auto& target:caption_targets_)caption_renderer_->destroyTarget(target);caption_targets_.clear();
+          if(caption_swapchain_)xrDestroySwapchain(caption_swapchain_);caption_swapchain_=XR_NULL_HANDLE;
+          XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;info.format=format_;info.sampleCount=1;info.width=width;info.height=height;info.faceCount=info.arraySize=info.mipCount=1;
+          xrCheck(xrCreateSwapchain(xr_.session,&info,&caption_swapchain_),"create subtitle layer");
+          uint32_t count{};xrCheck(xrEnumerateSwapchainImages(caption_swapchain_,0,&count,nullptr),"subtitle image count");
+          std::vector<XrSwapchainImageVulkanKHR> images(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+          xrCheck(xrEnumerateSwapchainImages(caption_swapchain_,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),"subtitle images");
+          for(const auto& item:images)caption_targets_.push_back(caption_renderer_->createTarget(width,height,item.image));
+          caption_width_=width;caption_height_=height;
+        }
+        uint32_t index{};XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};xrCheck(xrAcquireSwapchainImage(caption_swapchain_,&acquire,&index),"acquire subtitle image");
+        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=XR_INFINITE_DURATION;xrCheck(xrWaitSwapchainImage(caption_swapchain_,&wait),"wait subtitle image");
+        try{DrawList draw;draw.image({float(image->x),float(image->y),float(image->width),float(image->height)},{0,0,1,1});caption_renderer_->draw(caption_targets_.at(index),draw);}
+        catch(...){XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrReleaseSwapchainImage(caption_swapchain_,&release);throw;}
+        XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrCheck(xrReleaseSwapchainImage(caption_swapchain_,&release),"release subtitle image");
+      }
+#endif
+      __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","SUBTITLE_VISIBLE canvas=%dx%d image=%dx%d",width,height,image->width,image->height);
+    }catch(const std::exception& e){failed_caption_=snapshot.config;app.caption_ready=false;caption_visible_=false;ui.setToast(e.what());__android_log_print(ANDROID_LOG_ERROR,"CyVRPlayer","SUBTITLE_RENDER_ERROR %s",e.what());}
+  }
   bool zoom_settling() const {
     return std::chrono::steady_clock::now() - zoom_changed_ <
            std::chrono::milliseconds(250);
@@ -846,7 +1002,7 @@ private:
         height > properties.limits.maxImageDimension2D)
       throw std::runtime_error(
           "Native video dimensions exceed this GPU's image limits");
-    video_ = std::make_unique<VideoRenderer>(*gpu_, format_, assets_);
+    if(auto app=application_();!app || !app->session().state().volumetric)video_ = std::make_unique<VideoRenderer>(*gpu_, format_, assets_);
 #if CYVR_ENABLE_IMMERSIVE
     if (immersive_) {
       XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};

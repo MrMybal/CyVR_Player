@@ -1,6 +1,6 @@
 # CyVR Player
 
-A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI 0.4 foundation](../CyVR_UI). Alpha version: **0.4.4-alpha.1**.
+A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI 0.4 foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.5-alpha.1**.
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model.
 
@@ -9,6 +9,10 @@ The app opens in a **real Android 2D window**, without creating an OpenXR instan
 From PowerShell in this folder:
 
 ```powershell
+python tools/prepare_splats.py
+python tools/build_subtitles.py --target windows
+python tools/build_subtitles.py --target android
+python tools/build_ffmpeg_android.py
 python tools/build_app.py --target all
 python tools/build_app.py --target android --no-immersive
 ```
@@ -23,7 +27,7 @@ The second command builds an alternative 2D-only APK with `CYVR_ENABLE_IMMERSIVE
 
 Both APK variants keep `com.cyvr.player` and the existing development signing key, so `adb install -r` preserves app files and grants. They replace one another. Android API 32 and Horizon OS v69 or later are required. These are development builds, not store release packages.
 
-For the Android Alpha package, run `python tools/build_ffmpeg_android.py --alpha` then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.4-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
+For the Android Alpha package, run `python tools/prepare_splats.py`, `python tools/build_subtitles.py --target android`, `python tools/build_ffmpeg_android.py --alpha`, then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.5-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
 
 Prerequisites are the existing Android SDK (NDK 27.2.12479018, CMake 3.22.1, Build Tools 35.0.1, platform 34), JDK, LLVM/Windows C++ SDK, and the sibling `../CyVR_UI` checkout. `ANDROID_HOME`, `JAVA_HOME` and `CXX` can override tool locations. `CYVR_UI_ROOT` is the corresponding CMake setting. The local foundation includes the small reusable GPU/lifecycle extension hooks described in [the integration notes](docs/interface.md); retain those local changes when updating it.
 
@@ -37,27 +41,29 @@ python tools/build_ffmpeg_android.py
 
 ## Use and quality
 
-Open **CyVR Player** from Home or Overlay. Browse the app's own external folder, use **Allow a folder** for Android SAF access, or enter an HTTP(S), HLS or RTSP address in **Open stream**. Android VIEW intents are also supported. Display settings select mono, SBS or top/bottom, half-width/height packing, eye inversion and flat/180°/360° projection. Panoramic presentation requires immersion.
+Open **CyVR Player** from Home or Overlay. Browse the app's own external folder, use **Allow a folder** for Android SAF access, or enter an HTTP(S), HLS or RTSP address in **Open stream**. Android VIEW intents are also supported. Display settings select mono, SBS or top/bottom, half-width/height packing, eye inversion and flat/180Â°/360Â° projection. Panoramic presentation requires immersion.
+
+In immersion, opening a video starts with a compact seek bar, play/pause, previous/next file and **Full interface**. Controls hide after **three seconds** without controller input or significant hand/controller movement. A held interaction keeps them visible. Movement or a button restores the compact bar; the first waking trigger gesture is consumed. **Compact controls** returns from the full interface. Previous/next uses the current folder playlist and does not wrap at its ends.
 
 On the **Playback** page, **Hide interface** enters video-only viewing without pausing playback. In 2D the picture fills the available window while preserving its aspect ratio. Tap anywhere, or press Enter, Space or Back, to restore the controls. In immersion the main panel, dock, HUD, controller/hand meshes, rays and cursors disappear; either trigger, a tracked-hand pinch, the right controller's **A** button or Back restores them. The first waking gesture is consumed, so it cannot also activate a button underneath. **F11** toggles the interface when using a physical keyboard. Hiding is temporary: a newly opened video, a media error or a replacement activity shows the controls again. Quest system window management remains available in 2D.
 
-In immersion, the video has its own scene placement. You can move and release the controls panel to either side without moving or rotating the cinema screen or panorama. This applies to Native, CAS, FSR and GSR, including paused/video-only viewing. **Display → Video format → Recenter video** places the video in front of your current view and leaves the controls panel in place. Video zoom and position controls remain available. Placement is retained within the current immersive host; a new immersive session starts with a new placement. Initial tracking fallback may be head-relative until a valid local pose is available.
+In immersion, the video has its own scene placement. You can move and release the controls panel to either side without moving or rotating the cinema screen or panorama. This applies to Native, CAS, FSR and GSR, including paused/video-only viewing. **Display â†’ Video format â†’ Recenter video** places the video in front of your current view and leaves the controls panel in place. Video zoom and position controls remain available. Placement is retained within the current immersive host; a new immersive session starts with a new placement. Initial tracking fallback may be head-relative until a valid local pose is available.
 
 The **Playback timeline** shows the current position and total duration. Click or drag the thumb to select a time; the displayed time previews the selection while dragging, and one seek is committed on release. Playback keeps its previous play/pause state. Losing focus, hiding controls or cancelling the gesture discards the unfinished selection. Live/unseekable sources and sources without a known duration show a disabled track. The native decoder retains the final preroll frame when a seek reaches the end, so the last available picture can still be presented.
 
-In **Native** mode video stays at its **decoded source dimensions** through the MediaCodec → PRIVATE AImageReader → AHardwareBuffer → Vulkan path; pixels are not copied through the CPU. VR uses dedicated native-size compositor video layers. The 2D preview fits the window while retaining its full-size source texture. Enhancement reconstructs the displayed window or eye view; it never reduces decoder resolution. The panel renders at the Android surface size. Immersive scene targets use the runtime's recommended resolution, with no former 1024-pixel reference cap. This does not promise a one-to-one mapping to physical display pixels through the headset optics, or recover detail absent from a source.
+In **Native** mode video stays at its **decoded source dimensions** through the MediaCodec â†’ PRIVATE AImageReader â†’ AHardwareBuffer â†’ Vulkan path; pixels are not copied through the CPU. VR uses dedicated native-size compositor video layers. The 2D preview fits the window while retaining its full-size source texture. Enhancement reconstructs the displayed window or eye view; it never reduces decoder resolution. The panel renders at the Android surface size. Immersive scene targets use the runtime's recommended resolution, with no former 1024-pixel reference cap. This does not promise a one-to-one mapping to physical display pixels through the headset optics, or recover detail absent from a source.
 
-Navigation, document URI, URL draft, stereo/projection settings, playback position, image corrections, filter, scale and zoom settings, and pause state are saved in private app storage across activity replacement and process restart. Shared CyVR_UI preferences preserve language and theme. Existing SAF grants and app files are retained.
+Container track selections, external subtitle URI, navigation, document URI, URL draft, stereo/projection settings, playback position, image corrections, filter, scale and zoom settings, and pause state are saved in private app storage across activity replacement and process restart. Shared CyVR_UI preferences preserve language and theme. Existing SAF grants and app files are retained.
 
 ## Image controls and previews
 
 The library shows **static 160 x 90 video thumbnails**, decoded on one background worker with one software thread. The worker only requests the current seven rows, keeps at most 32 entries in memory (including failed files), cancels obsolete requests and pauses thumbnail requests during playback. It supports local files and authorized SAF descriptors. It does not auto-fetch stream URLs. Unsupported or over-budget files keep a type placeholder. No continuous animated preview is decoded.
 
-**Display → Image corrections** provides exposure (−2 to +2 EV), contrast, saturation, gamma, zoom (1–4x), and horizontal/vertical position. Reset restores neutral values. In 2D, zoom crops within the video, preserving the aspect ratio and eye boundaries. In immersive flat cinema, zoom enlarges the physical screen while retaining the complete picture; position moves that screen. Panorama zoom is a digital per-eye crop. Changes also redraw an already-paused frame without resuming decoding.
+**Display â†’ Image corrections** provides exposure (âˆ’2 to +2 EV), contrast, saturation, gamma, zoom (1â€“4x), and horizontal/vertical position. Reset restores neutral values. In 2D, zoom crops within the video, preserving the aspect ratio and eye boundaries. In immersive flat cinema, zoom enlarges the physical screen while retaining the complete picture; position moves that screen. Panorama zoom is a digital per-eye crop. Changes also redraw an already-paused frame without resuming decoding.
 
-Controls remain available through the on-screen sliders/buttons. In immersion, the **left thumbstick** seeks ±10 seconds once per deflection; the **right thumbstick up/down** adjusts zoom. Hold **grip + trigger**, then move the hand up/down to zoom directly, including with the interface hidden. A trigger alone still restores hidden controls. On a physical keyboard, left/right seek ±10 seconds and up/down zoom; the first key restores hidden controls. The Windows inspector also accepts the mouse wheel for zoom.
+Controls remain available through the on-screen sliders/buttons. In immersion, the **left thumbstick** seeks Â±10 seconds once per deflection; the **right thumbstick up/down** adjusts zoom. Hold **grip + trigger**, then move the hand up/down to zoom directly, including with the interface hidden. A trigger alone still restores hidden controls. On a physical keyboard, left/right seek Â±10 seconds and up/down zoom; the first key restores hidden controls. The Windows inspector also accepts the mouse wheel for zoom.
 
-**Display → Image quality** offers:
+**Display â†’ Image quality** offers:
 
 | Mode | Processing | Output |
 | --- | --- | --- |
@@ -70,21 +76,38 @@ Filters affect **only the video**, so the native UI stays sharp. SBS/TB taps cla
 
 The default native path keeps the complete decoded source in one conversion/correction pass. Enhancement first projects **only the displayed picture**: the fitted image in 2D, or the current predicted field of view for each eye in VR. CAS sharpens at the output resolution. FSR/GSR reconstruct from the available source detail in that view (including zoom); their input never exceeds the output. Each axis retains its available detail independently, including half-width/height stereo; the projection FOV and UV mapping preserve geometry even when the intermediate has a different aspect ratio. The output defaults to **Headset / window**, meaning the runtime's recommended eye resolution or actual window picture size. Optional 1.25x, 1.5x and 2x choices multiply that display target. All controls remain available, including with large panoramas. The previous fixed 16-megapixel filter cap is removed. A Vulkan limit/allocation failure preserves the requested settings, reports an error, and temporarily uses native rendering until a filter/scale request retries it.
 
-Conversion/projection and all filter passes now share one command buffer, one queue submission and one completion wait per eye. CAS/GSR need one RGB input; FSR additionally needs an EASU intermediate. Playback does not read pixels through the CPU. There is no claim of sustained 4K/8K or thermal performance without headset measurements.
+Conversion/projection and all filter passes now share one command buffer, one queue submission and one completion wait per eye. CAS/GSR need one RGB input; FSR additionally needs an EASU intermediate. Hardware video playback does not read pixels through the CPU; explicit software fallback does. There is no claim of sustained 4K/8K or thermal performance without headset measurements.
 
-On **Playback → Performance**, the HUD separates the file's nominal frame rate, distinct video frames processed by the GPU, usable decoder output, app frame submissions and the XR runtime's reported refresh rate. Repeated VR redraws do not inflate the video count. It also shows late drops, queued frames, rendering errors, GPU video mean/p95 and CPU work including waits. GPU timings use Vulkan timestamps when supported, cover video conversion/projection/filter passes (summed across both VR eyes), and exclude UI, compositor and decoding. Unknown measurements remain **Not measured**. Event rates age out when stalled, and pause/seek clears old cadence history. These measurements do **not** measure frames actually displayed by the Quest compositor.
+On **Playback â†’ Performance**, the HUD separates the file's nominal frame rate, distinct video frames processed by the GPU, usable decoder output, app frame submissions and the XR runtime's reported refresh rate. Repeated VR redraws do not inflate the video count. It also shows late drops, queued frames, rendering errors, GPU video mean/p95 and CPU work including waits. GPU timings use Vulkan timestamps when supported, cover video conversion/projection/filter passes (summed across both VR eyes), and exclude UI, compositor and decoding. Unknown measurements remain **Not measured**. Event rates age out when stalled, and pause/seek clears old cadence history. These measurements do **not** measure frames actually displayed by the Quest compositor.
 
 See [processing details and limits](docs/image-processing.md).
 
-## Implemented scope
+## Containers, audio and subtitles
 
-The current APK plays **AVC/HEVC SDR video without audio output**. It includes an asynchronous paginated file browser, URL keyboard, play/pause/seek, hardware decoder selection and TLS verification using Android system certificates. HTTP AVC, HTTP HEVC and HLS AVC have been exercised on Quest 3. Real RTSP/live sessions, provider-specific SAF behavior and dynamic format changes still need qualification.
+**Playback â†’ Tracks, subtitles and chapters** lists container video, audio and subtitle tracks, including codec, language, title, default/forced flags, and chapters. Selecting a track reopens the same document at the current time and preserves play/pause. The selection survives activity changes and restart. Track changes currently require a seekable source. Audio and subtitles can be disabled independently. Select an external subtitle file in the library after opening a video.
 
-Audio output/A-V synchronization, subtitle display, HDR tone mapping and Gaussian Splatting loading/rendering remain unimplemented. CAS, FSR 1 and Snapdragon GSR 1 are applied by real Vulkan fragment pipelines; see the image controls below. There is no claim of universal format support or sustained 8K performance.
+The Android profile enables FFmpeg's built-in LGPL-compatible demuxers, parsers and decoders, including Matroska compression through zlib. Video uses MediaCodec when the device reports support (AVC/HEVC/VP8/VP9/AV1/MPEG-2/MPEG-4/H.263); configuration failure falls back to FFmpeg software decoding. A later hardware failure retries through software on seekable sources. Software video uses a four-buffer AHB pool; ten-bit input retains ten-bit RGB precision. This path copies/converts pixels on the CPU and can be substantially slower.
+
+Audio is decoded with FFmpeg, resampled/downmixed to stereo float and sent to AAudio. Video follows the audio presentation clock when present. Audio buffers are bounded; the callback allocates nothing and uses silence for timestamp gaps. Seek recreates the timeline and decoders. Unsupported audio/subtitle initialization leaves video usable and reports the track error in the tracks panel.
+
+Text subtitles use **libass + FreeType + HarfBuzz + FriBidi**, including ASS/SSA styling, positioning, animation and embedded font attachments. SRT and WebVTT are converted by FFmpeg. FFmpeg bitmap subtitle decoders feed the same overlay (including PGS/DVD/DVB when decodable). In VR, captions have a separate video-anchored compositor layer; hiding or moving the controls does not hide or move them. In 2D they overlay the fitted video. External subtitle files are limited to 16 MiB and queued events to 64 MiB. Local IDX/VobSub pairs need their companion file; SAF descriptors cannot resolve arbitrary companion paths.
+
+HDR10/PQ and HLG are converted in Vulkan from BT.2020 to the SDR sRGB display path, before image corrections and reconstruction. The tone mapper uses available mastering peak metadata (default 1,000 nits). This is tone mapping to SDR, not native HDR panel output or Dolby Vision/HDR10+ dynamic-metadata processing.
+
+## Gaussian Splatting
+
+The player loads standard **Gaussian PLY** (ASCII or little-endian binary, with Gaussian scale/rotation/opacity/SH attributes) and the common **32-byte `.splat`** format. These are real volumetric scenes: the immersive renderer uses each eye's current pose, GPU visibility, stable 32-bit radix sorting and Gaussian rasterization on the same Vulkan device as CyVR_UI. The MIT backend is pinned from SplatKit; no noncommercial INRIA renderer is bundled. Native resolution and Native/CAS/FSR/GSR remain selectable. The 2D host also displays these scenes.
+
+Animated independent frames use the explicitly internal `.splatseq` format documented in [Gaussian playback](docs/gaussian-splatting.md). Play/pause and seek share the playback controls. It is not a standardized Gaussian video codec. The current profile supports at most **1,000,000 splats/frame**, SH degrees 0â€“3, one decoded frame plus the frame retained by rendering, and bounded file loading. Source scenes are centered/scaled consistently from the first frame. The backend packs colour to RGBA8 and covariance/SH to half precision; native target resolution does not make this representation lossless. SPZ, SOG, compressed PLY, deformation-based 4D models, sequence soundtracks and network/SAF-relative sequence manifests are not implemented.
+
+## Scope limits
+
+Broad format support depends on the compiled decoder, device capabilities and the particular stream. AV1 currently needs a suitable hardware decoder on Quest; no dav1d software decoder is bundled. DRM, MVC/MV-HEVC stereoscopic extraction, fisheye/cubemap adapters, audio-only playback, disc menus, SMB/NFS and plain M3U/PLS playlists are not implemented. HLS/HTTP(S)/RTSP paths remain available; the Android profile does not include libxml2 for DASH or libSRT. Large/high-bitrate software decode can exceed mobile CPU capacity. There is no universal-format or sustained 8K guarantee.
 
 ## Verify
 
 ```powershell
+python tests/container_integration.py
 python tools/verify_dependencies.py
 python tools/generate_player_locales.py --check
 python tools/adapt_gsr1.py --check
@@ -97,9 +120,9 @@ python tests/quest_image.py --serial QUEST_SERIAL
 python tests/quest_view.py --serial QUEST_SERIAL
 ```
 
-`build_app.py --target windows` runs six CTest suites, including application state transfer, malformed state handling, pointer navigation, translations, independent 24 fps video / 72 Hz redraw counting, stalls and the shared UI core. The GPU suite covers 134 cases, including identical output from separate and combined submissions for CAS/FSR/GSR, the real projection shader before filtering in mono-eye/SBS/TB/cinema/180°/360°, transparent edges and preserved detail when only one axis needs upscaling. `quest_hosts.py` requires `Exemples/avc.mp4` in the app's external files folder; it uses real Android input to test resizing, resume and both presentation transitions. For the installed 2D-only variant, add `--panel-only`. Network tests remove their own adb reverse when complete. Device tests change the current document, navigation and UI settings; they do not clear app data.
+`build_app.py --target windows` runs seven CTest suites, including application state transfer, malformed state handling, pointer navigation, translations, independent 24 fps video / 72 Hz redraw counting, stalls and the shared UI core. The GPU suite covers 174 cases, including identical output from separate and combined submissions for CAS/FSR/GSR, the real projection shader before filtering in mono-eye/SBS/TB/cinema/180Â°/360Â°, transparent edges and preserved detail when only one axis needs upscaling. `quest_hosts.py` requires `Exemples/avc.mp4` in the app's external files folder; it uses real Android input to test resizing, resume and both presentation transitions. For the installed 2D-only variant, add `--panel-only`. Network tests remove their own adb reverse when complete. Device tests change the current document, navigation and UI settings; they do not clear app data.
 
-See [validation and remaining measurements](docs/validation.md), [host integration](docs/interface.md), [media architecture](docs/architecture.md), [sources and streams](docs/sources-et-flux.md), [dependency review](docs/bibliotheques.md) and [Gaussian Splatting roadmap](docs/gaussian-splatting.md).
+See [validation and remaining measurements](docs/validation.md), [host integration](docs/interface.md), [media architecture](docs/architecture.md), [sources and streams](docs/sources-et-flux.md), [dependency review](docs/bibliotheques.md) and [Gaussian Splatting playback](docs/gaussian-splatting.md).
 
 ## License
 

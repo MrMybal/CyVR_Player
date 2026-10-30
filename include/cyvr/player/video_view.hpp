@@ -1,6 +1,7 @@
 #pragma once
 #include "cyvr/core.hpp"
 #include "cyvr/player/image_settings.hpp"
+#include "cyvr/player/video_color.hpp"
 namespace cyvr::player {
 struct VideoView {
   // 0 packed source, 1 single eye in a 2D panel, 2 cinema, 3 VR180, 4 VR360.
@@ -19,7 +20,7 @@ struct alignas(16) VideoPush {
 };
 static_assert(sizeof(VideoPush) == 128);
 inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
-                            int stereo, const VideoView &mapping) {
+                            int stereo, const VideoView &mapping, VideoColor color = {}) {
   VideoPush p;
   p.crop[0] = crop.x;
   p.crop[1] = crop.y;
@@ -36,6 +37,7 @@ inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
   p.format[0] = stereo;
   p.format[1] = mapping.kind;
   p.format[2] = mapping.eye;
+  p.format[3] = color.transfer | (color.standard << 8);
   std::copy(mapping.fov, mapping.fov + 4, p.fov);
   const auto q = mapping.orientation;
   p.rotation[0] = q.x;
@@ -47,6 +49,7 @@ inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
   p.origin[2] = mapping.origin.z;
   p.screen[0] = mapping.screen_width;
   p.screen[1] = mapping.screen_height;
+  p.screen[2] = color.peak_nits;
   return p;
 }
 inline cyvr::Quat inverse_rotation(cyvr::Quat q) {

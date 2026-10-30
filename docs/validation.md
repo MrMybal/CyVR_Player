@@ -1,3 +1,17 @@
+# 0.4.5-alpha.1 validation — 2026-10-30
+
+New local checks cover PQ/HLG transfer/tone mapping in 40 real Vulkan cases (174 image cases total), container track changes preserving pause/time, two video/two audio/two subtitle tracks in an original MKV fixture, SRT and styled/animated ASS, embedded fonts and chapters, PGS palette/alpha/display clearing, and Vulkan subtitle alpha overlay. Sixteen existing file/descriptor/HTTP/HLS/DASH/TLS/cancellation integration cases pass on the Windows FFmpeg SDK. Android DASH is not enabled by that desktop result.
+
+The Gaussian suite executes actual GPU visibility/radix sorting/rasterization, translated stereo views, all four postprocessing modes, malformed input handling, independent-frame sequence seek/pause, generation changes, and compact/full/hidden controls with consumed wake input. Three-second inactivity boundaries are tested deterministically in the portable controls helper. Synthetic scenes do not establish large-scene or headset throughput.
+
+Android ARM64 Alpha, its strictly 2D alternative and the Windows host compile. Both APKs pass manifest, ARM64, 16 KiB ELF/ZIP alignment and packaged-license checks. The default Alpha was installed on Quest 3 with `adb install -r`, preserving the existing signing identity and app data. Its restored 3840×2160 HEVC/PQ source reached MediaCodec and Vulkan rendering with no reported render error; AAudio opened and started. ADB input verified panel launch without OpenXR, resizing to 1920×1080 and restoring 1600×1100, entry into immersion, inactivity hiding after about three seconds, key wake, hiding again after 3.006 seconds, and returning to the 2D host. Runtime composition reported zero chrome layers while media/caption layers remained present.
+
+The device run exposed redundant rasterization/upload for static bitmap subtitles: libass marks an empty ASS track as changed on every call. Bitmap-only tracks now use their event cache; a PGS regression check requires no update for an unchanged cue and correct clearing at its end. The corrected APK was rebuilt, reinstalled and exercised through the same hosts.
+
+These are ADB/runtime checks, not worn-headset visual or audible acceptance. Actual HDR colour, binocular caption comfort, physical hand/controller wake, track-choice UX, high-resolution software decode and Gaussian throughput/thermal behaviour still need manual/device qualification. Prior evidence below applies to its named older builds.
+
+## Earlier validation records
+
 # Validation et performances
 
 ## 0.4.4 — vidéo indépendante du panneau immersif (29 octobre 2026)

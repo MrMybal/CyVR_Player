@@ -3,7 +3,11 @@
 #include "cyvr/player/demuxer.hpp"
 #include "cyvr/player/file_browser.hpp"
 #include "cyvr/player/performance.hpp"
+#include "cyvr/player/playback_controls.hpp"
 #include "cyvr/player/state.hpp"
+#include "cyvr/player/subtitles.hpp"
+#include "cyvr/player/track_selection.hpp"
+#include "cyvr/player/splats.hpp"
 #include <functional>
 #include <memory>
 #ifdef __ANDROID__
@@ -30,12 +34,16 @@ struct PlayerState {
   std::uint64_t revision{};
   std::string status{"Choose a video."}, title, codec;
   std::vector<TrackInfo> tracks;
+  std::vector<ChapterInfo> chapters;
+  int video_track{-1},audio_track{-1},subtitle_track{-1};
   std::int64_t duration_us{}, position_us{}, seek_target_us{};
   bool seeking{};
   int width{}, height{};
   double pixel_aspect{1};
   double nominal_fps{};
   bool ready{}, playing{}, seekable{}, ended{};
+  bool volumetric{};
+  std::string audio_status,subtitle_status;
 };
 // One serialized media worker. UI, filesystem and network never share a lock
 // during blocking I/O. Commands cancel the previous open/read before replacing
@@ -45,7 +53,12 @@ public:
   explicit PlayerSession(Platform platform);
   ~PlayerSession();
   void open(std::string location, std::string title, std::int64_t start_us = 0,
-            bool autoplay = true);
+            bool autoplay = true, TrackSelection selection = {});
+  bool select_track(TrackKind,int index);
+  bool external_subtitle(std::string location);
+  TrackSelection selection() const;
+  SubtitleSnapshot subtitles() const;
+  SplatSnapshot splats() const;
   void stop();
   void pause(bool paused);
   void seek(std::int64_t position_us);
@@ -78,6 +91,8 @@ public:
   int page() const { return page_; }
   bool preview_ready{};
   bool preview_is_view{};
+  bool caption_ready{};
+  cyvr::Rect caption_rect{};
   bool processing_active{};
   std::string processing_status;
   std::uint64_t processing_request{};
@@ -113,6 +128,13 @@ private:
   int page_{}, offset_{};
   int display_tab_{};
   bool zoom_gesture_[2]{}, stick_latched_[2]{};
+  PlaybackControls controls_;
+  std::vector<BrowserItem> playlist_;
+  cyvr::Pose last_controller_pose_[2]{};
+  bool controller_seen_[2]{}, wake_gesture_[2]{};
+  float last_trigger_[2]{}, last_grip_[2]{};
+  void control_activity();
+  bool adjacent_video(int direction, bool play);
   float zoom_start_[2]{}, zoom_y_[2]{};
   std::chrono::steady_clock::time_point controller_time_[2]{};
   bool shift_{}, symbols_{};
@@ -129,6 +151,10 @@ private:
   bool draw_performance(cyvr::DrawList &);
   double last_performance_update_{};
   void cancel_scrub();
+  bool tracks_open_{};
+  int track_tab_{},track_offset_{};
+  void draw_tracks(cyvr::DrawList&);
+  bool track_action(int);
   std::int64_t timeline_position() const;
   void button(cyvr::DrawList &, int, cyvr::Rect, std::string_view,
               bool selected = false, bool enabled = true);

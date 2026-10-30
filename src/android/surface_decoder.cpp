@@ -29,10 +29,13 @@ ImageLease& ImageLease::operator=(ImageLease&& other) noexcept {
     if (this != &other) {
         reset();
         image_ = std::exchange(other.image_, nullptr);
+        buffer_ = std::exchange(other.buffer_, nullptr);
+        cpu_owner_ = std::move(other.cpu_owner_);
         acquire_fd_ = std::exchange(other.acquire_fd_, -1);
         owner_ = std::move(other.owner_);
         pts_us = other.pts_us;
         epoch = other.epoch;
+        color = other.color;
     }
     return *this;
 }
@@ -40,9 +43,12 @@ void ImageLease::reset() noexcept {
     if (image_) AImage_deleteAsync(image_, std::exchange(acquire_fd_, -1));
     else if (acquire_fd_ >= 0) ::close(std::exchange(acquire_fd_, -1));
     image_ = nullptr;
+    buffer_ = nullptr;
+    cpu_owner_.reset();
     owner_.reset();
 }
 AHardwareBuffer* ImageLease::hardware_buffer() const {
+    if (buffer_) return buffer_;
     if (!image_) throw std::logic_error("Image lease is empty");
     AHardwareBuffer* buffer = nullptr;
     check(AImage_getHardwareBuffer(image_, &buffer), "AImage_getHardwareBuffer");
@@ -57,6 +63,14 @@ void ImageLease::release_after_gpu(int release_fd) noexcept {
     if (image_) AImage_deleteAsync(std::exchange(image_, nullptr), release_fd);
     else if (release_fd >= 0) ::close(release_fd);
     owner_.reset();
+    buffer_ = nullptr;
+    cpu_owner_.reset();
+}
+ImageLease ImageLease::from_buffer(AHardwareBuffer* buffer, int fence, std::shared_ptr<void> owner,
+                                    std::int64_t pts, std::uint64_t generation, VideoColor color) {
+    ImageLease lease;
+    lease.buffer_=buffer;lease.acquire_fd_=fence;lease.cpu_owner_=std::move(owner);
+    lease.pts_us=pts;lease.epoch=generation;lease.color=color;return lease;
 }
 SurfaceDecoder::~SurfaceDecoder() { close(); }
 void SurfaceDecoder::close() noexcept {
@@ -77,6 +91,10 @@ void SurfaceDecoder::open(const char* name, AMediaFormat* format,
         !AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_HEIGHT, &height) || height <= 0)
         throw std::invalid_argument("Decoder requires a codec name, dimensions and 2..16 image slots");
     try {
+        AMediaFormat_getInt32(format, "color-standard", &color_.standard);
+        AMediaFormat_getInt32(format, "color-transfer", &color_.transfer);
+        AMediaFormat_getInt32(format, "color-range", &color_.range);
+        AMediaFormat_getFloat(format, "cyvr-peak-nits", &color_.peak_nits);
         reader_ = std::make_shared<ReaderState>();
         reader_->epoch = epoch;
         check(AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
@@ -115,8 +133,13 @@ DrainResult SurfaceDecoder::drain_one() {
     const auto index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
     if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER || index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED)
         return {};
-    if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED)
+    if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+        auto format = output_format();
+        AMediaFormat_getInt32(format.get(), "color-standard", &color_.standard);
+        AMediaFormat_getInt32(format.get(), "color-transfer", &color_.transfer);
+        AMediaFormat_getInt32(format.get(), "color-range", &color_.range);
         return {DrainKind::format_changed, 0, false};
+    }
     if (index < 0) throw std::runtime_error("MediaCodec output dequeue failed");
     const bool eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
     const bool config = (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG) != 0;
@@ -136,6 +159,7 @@ ImageLease SurfaceDecoder::try_acquire_next() {
     std::int64_t timestamp_ns = 0;
     check(AImage_getTimestamp(image, &timestamp_ns), "AImage_getTimestamp");
     lease.pts_us = timestamp_ns / 1000;
+    lease.color = color_;
     return lease;
 }
 MediaFormatPtr SurfaceDecoder::output_format() const {

@@ -4,6 +4,7 @@
 #define _UNICODE
 #include "cyvr/gpu.hpp"
 #include "cyvr/player/application.hpp"
+#include "cyvr/player/splat_renderer.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -20,6 +21,11 @@ struct Desktop {
     Target target;
     UiModel ui;
     std::unique_ptr<PlayerApplication> app;
+    std::unique_ptr<SplatRenderer> splats;
+    Target splatTarget;
+    std::shared_ptr<const splat::SplatCloud> drawnSplat;
+    ImageSettings splatSettings;
+    AssetReader readAsset;
     DrawList main, dock;
     std::vector<uint8_t> pixels;
     HWND window{};
@@ -31,17 +37,19 @@ struct Desktop {
         app.reset();
         if (gpu.device)
             vkDeviceWaitIdle(gpu.device);
+        splats.reset();if(splatTarget.image)renderer.destroyTarget(splatTarget);
         if (target.image)
             renderer.destroyTarget(target);
     }
     void initialize(const std::filesystem::path &assets, const std::string &root) {
         gpu.createStandalone();
-        renderer.initialize(VK_FORMAT_R8G8B8A8_SRGB, [&](const std::string &name) {
+        readAsset=[assets](const std::string &name) {
             std::ifstream file(assets / name, std::ios::binary);
             if (!file)
                 throw std::runtime_error("Missing asset: " + name);
             return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), {});
-        });
+        };
+        renderer.initialize(VK_FORMAT_R8G8B8A8_SRGB,readAsset);
         target = renderer.createTarget(1440, height);
         ui.viewportSize = {1440, float(height)};
         Platform platform;
@@ -51,6 +59,16 @@ struct Desktop {
     void tick() {
         ui.tick(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         app->tick();
+        if(app->session().state().volumetric && app->session().state().ready){
+            auto scene=app->session().splats();
+            if(scene.cloud && (scene.cloud!=drawnSplat || app->image!=splatSettings)){
+                if(!splats)splats=std::make_unique<SplatRenderer>(gpu,VK_FORMAT_R8G8B8A8_SRGB,readAsset);
+                if(!splatTarget.image)splatTarget=renderer.createTarget(1440,810);
+                splats->draw(splatTarget.image,{1440,810},scene,{{-app->image.pan_x*2,app->image.pan_y*2,3.5f/app->image.zoom},{}},{-1,1,9.f/16,-9.f/16},app->image,true);
+                renderer.setVideoTexture(splatTarget.view,renderer.imageSampler());app->preview_ready=true;app->preview_is_view=true;drawnSplat=scene.cloud;splatSettings=app->image;ui.invalidate();
+                app->session().frame_submitted(scene.epoch,scene.pts_us);
+            }
+        }else if(splats){renderer.setVideoTexture();splats.reset();drawnSplat.reset();app->preview_ready=false;ui.invalidate();}
         std::vector<uint8_t> thumbnails;if(app->take_thumbnails(thumbnails))renderer.uploadImages(160,630,thumbnails);
         if (revision != ui.revision)
             InvalidateRect(window, nullptr, FALSE);

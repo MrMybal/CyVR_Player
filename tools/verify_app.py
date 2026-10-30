@@ -37,6 +37,8 @@ def main():
             assert b'xrCreateInstance' not in native and b'libopenxr_loader.so' not in native
         for required in ['classes.dex','assets/video.vert.spv','assets/video.frag.spv','assets/video_filter.frag.spv',
                 'assets/font_atlas.bin','assets/hand_studio.bin','assets/ui.vert.spv','assets/ui.frag.spv',
+                'assets/subtitle-font.ttf','assets/licenses/libass-ISC.txt','assets/licenses/FriBidi-LGPLv2.1.txt',
+                'assets/licenses/FreeType-FTL.txt','assets/licenses/HarfBuzz-MIT.txt','assets/licenses/SplatKit-MIT.txt','assets/licenses/VMA-MIT.txt',
                 'assets/glass.frag.spv','assets/environment.vert.spv','assets/environment.frag.spv',
                 'assets/spatial.vert.spv','assets/spatial.frag.spv',
                 'assets/licenses/CyVR_Player-GPLv3.txt','assets/licenses/CyVR_Player-NOTICE.txt',

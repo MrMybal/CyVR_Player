@@ -1,5 +1,6 @@
 #pragma once
 #include "cyvr/player/image_settings.hpp"
+#include "cyvr/player/track_selection.hpp"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -12,6 +13,8 @@ struct ApplicationState {
   int page{}, offset{}, stereo{}, projection{}, display_tab{};
   bool half_stereo{}, swap_eyes{}, shift{}, symbols{}, playing{};
   ImageSettings image;
+  TrackSelection tracks;
+  bool tracks_open{};int track_tab{},track_offset{};
 };
 std::optional<ApplicationState>
 load_application_state(const std::string &path) noexcept;

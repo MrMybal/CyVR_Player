@@ -34,7 +34,10 @@ std::int64_t now_ns() {
 }
 std::string tag(AVDictionary* metadata,const char* key) {
     auto* value=av_dict_get(metadata,key,nullptr,0);
-    return value ? value->value : "";
+    if(!value || !value->value)return {};
+    std::string result=value->value;
+    if(result.size()>1024){std::size_t end=1024;while(end>0 && (static_cast<unsigned char>(result[end])&0xc0)==0x80)--end;result.resize(end);}
+    return result;
 }
 TrackKind track_kind(AVMediaType value) {
     if(value==AVMEDIA_TYPE_VIDEO) return TrackKind::video;
@@ -59,6 +62,7 @@ struct Demuxer::Impl {
     std::int64_t deadline=0;
     StreamOptions options;
     std::vector<TrackInfo> tracks;
+    std::vector<ChapterInfo> chapters;
     int fd=-1;
     std::int64_t offset=0,length=-1,position=0;
     bool fd_seekable=false;
@@ -176,7 +180,8 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
     next->format->interrupt_callback={Impl::interrupt,next.get()};
     next->format->probesize=options.probe_bytes;
     next->format->max_analyze_duration=options.analyze_us;
-    next->format->max_streams=64;
+    next->format->max_streams=256;
+    next->format->flags|=AVFMT_FLAG_GENPTS;
     if(options.low_latency) next->format->flags|=AVFMT_FLAG_NOBUFFER;
     Dictionary settings;
     settings.integer("rw_timeout",std::int64_t(options.read_timeout_ms)*1000);
@@ -202,12 +207,34 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         TrackInfo track;
         track.index=int(i); track.kind=track_kind(p->codec_type); track.codec=avcodec_get_name(p->codec_id);
         track.language=tag(stream->metadata,"language"); track.title=tag(stream->metadata,"title");
+        track.default_track=stream->disposition&AV_DISPOSITION_DEFAULT;
+        track.forced=stream->disposition&AV_DISPOSITION_FORCED;
+        track.attached_picture=stream->disposition&AV_DISPOSITION_ATTACHED_PIC;
+        track.hearing_impaired=stream->disposition&AV_DISPOSITION_HEARING_IMPAIRED;
+        track.visual_impaired=stream->disposition&AV_DISPOSITION_VISUAL_IMPAIRED;
         track.width=p->width; track.height=p->height; track.sample_rate=p->sample_rate; track.channels=p->ch_layout.nb_channels;
         if(p->codec_type==AVMEDIA_TYPE_VIDEO){const auto rate=av_guess_frame_rate(next->format,stream,nullptr);if(rate.num>0&&rate.den>0)track.nominal_fps=av_q2d(rate);}
         if(stream->duration!=AV_NOPTS_VALUE) track.duration_us=av_rescale_q(stream->duration,stream->time_base,microseconds);
         next->tracks.push_back(std::move(track));
     }
+    for(unsigned i=0;i<next->format->nb_chapters && i<10000;++i){
+        const auto* c=next->format->chapters[i];
+        next->chapters.push_back({av_rescale_q(c->start,c->time_base,microseconds),av_rescale_q(c->end,c->time_base,microseconds),tag(c->metadata,"title")});
+    }
     impl_=std::move(next);
+}
+const std::vector<ChapterInfo>& Demuxer::chapters() const {if(!impl_)throw std::logic_error("Media is closed");return impl_->chapters;}
+std::vector<FontAttachment> Demuxer::fonts() const {
+    if(!impl_)throw std::logic_error("Media is closed");
+    std::vector<FontAttachment> result;std::size_t total=0;
+    for(unsigned i=0;i<impl_->format->nb_streams;++i){
+        const auto* s=impl_->format->streams[i];const auto* p=s->codecpar;
+        if(p->codec_type!=AVMEDIA_TYPE_ATTACHMENT || (p->codec_id!=AV_CODEC_ID_TTF && p->codec_id!=AV_CODEC_ID_OTF))continue;
+        if(p->extradata_size<=0 || std::size_t(p->extradata_size)>32*1024*1024-total)continue;
+        total+=std::size_t(p->extradata_size);
+        result.push_back({tag(s->metadata,"filename"),{p->extradata,p->extradata+p->extradata_size}});
+    }
+    return result;
 }
 const std::vector<TrackInfo>& Demuxer::tracks() const {
     if(!impl_) throw std::logic_error("Media is closed");

@@ -7,7 +7,7 @@ import java.util.ArrayList;
 
 /** Android API 29+. Call off the render thread, using the full stream format.
  * Capability reports are candidates: configure and sustained playback must
- * still succeed. This class has no UI and is not yet connected through JNI. */
+ * still succeed. Native playback retries in FFmpeg if hardware configuration fails. */
 public final class CodecProbe {
     private CodecProbe() {}
 

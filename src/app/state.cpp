@@ -85,6 +85,10 @@ bool save_application_state(const std::string &path,
     c.put(image.quality);
     c.put(image.upscale);
     c.put(std::clamp(s.display_tab, 0, 2));
+    c.put(std::uint64_t(0x54524b31));
+    for(int stream:{s.tracks.video,s.tracks.audio,s.tracks.subtitle})c.put(std::uint64_t(std::clamp(stream,-2,255)+2));
+    c.put(s.tracks.external_subtitle);
+    c.put(std::uint64_t(0x55494d31));c.put(s.tracks_open?1:0);c.put(std::clamp(s.track_tab,0,3));c.put(std::clamp(s.track_offset,0,10000));
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -168,6 +172,12 @@ load_application_state(const std::string &path) noexcept {
       s.image.sanitize();
       if (c.cursor < c.bytes.size())
         s.display_tab = int(std::min<std::uint64_t>(2, c.get()));
+      if(c.cursor<c.bytes.size()){
+        if(c.get()!=0x54524b31)return {};
+        for(int* stream:{&s.tracks.video,&s.tracks.audio,&s.tracks.subtitle}){const auto value=c.get();if(value>257)return {};*stream=int(value)-2;}
+        s.tracks.external_subtitle=c.string();
+        if(c.cursor<c.bytes.size()){if(c.get()!=0x55494d31)return {};s.tracks_open=c.get()!=0;s.track_tab=int(std::min<std::uint64_t>(3,c.get()));s.track_offset=int(std::min<std::uint64_t>(10000,c.get()));}
+      }
     }
     if (c.cursor != c.bytes.size() || s.url.size() > 2048)
       return {};

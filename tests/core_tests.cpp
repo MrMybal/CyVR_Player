@@ -3,6 +3,7 @@
 #include "cyvr/player/performance.hpp"
 #include "cyvr/player/postprocess.hpp"
 #include "cyvr/player/presentation_queue.hpp"
+#include "cyvr/player/playback_controls.hpp"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -22,6 +23,29 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-5; }
 template <class F> void rejects(F fn) {
   bool rejected = false;
   try {
+    {
+      PlaybackControls controls;
+      using Mode=PlaybackControls::Mode;
+      controls.update(false,0,false);
+      require(controls.mode()==Mode::full,"2D and non-playing library must keep full controls");
+      controls.update(true,10,false);
+      require(controls.mode()==Mode::compact,"Immersive playback must start compact");
+      controls.update(true,12.999,false);
+      require(controls.mode()==Mode::compact,"Controls must remain until three seconds");
+      controls.update(true,13,false);
+      require(controls.mode()==Mode::hidden,"Three seconds of inactivity must hide controls");
+      controls.activity(15);
+      require(controls.mode()==Mode::compact,"Waking must restore the compact controls");
+      controls.expand(16);
+      require(controls.mode()==Mode::full,"Full interface action must expand controls");
+      controls.update(true,20,true);
+      controls.update(true,22.9,false);
+      require(controls.mode()==Mode::full,"A held slider must defer automatic hiding");
+      controls.update(true,23,false);
+      require(controls.mode()==Mode::hidden,"Full controls must also auto-hide when interaction ends");
+      controls.update(false,30,false);
+      require(controls.mode()==Mode::full,"Errors and stopping playback must restore the library");
+    }
     fn();
   } catch (const std::invalid_argument &) {
     rejected = true;

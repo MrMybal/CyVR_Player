@@ -17,7 +17,10 @@ struct TrackInfo {
     int width = 0, height = 0, sample_rate = 0, channels = 0;
     std::optional<std::int64_t> duration_us;
     double nominal_fps{};
+    bool default_track{}, forced{}, attached_picture{}, hearing_impaired{}, visual_impaired{};
 };
+struct ChapterInfo { std::int64_t start_us{}, end_us{}; std::string title; };
+struct FontAttachment { std::string name; std::vector<std::uint8_t> data; };
 class MediaError : public std::runtime_error { using std::runtime_error::runtime_error; };
 struct PacketDeleter { void operator()(AVPacket*) const noexcept; };
 struct FrameDeleter { void operator()(AVFrame*) const noexcept; };
@@ -51,6 +54,8 @@ public:
     std::int64_t origin_us() const;
     int best_video_stream() const;
     int best_audio_stream() const;
+    const std::vector<ChapterInfo>& chapters() const;
+    std::vector<FontAttachment> fonts() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

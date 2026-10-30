@@ -1,5 +1,6 @@
 """Build against the sibling CyVR_UI without changing its sources or APK."""
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,12 @@ BUILD_TOOLS=SDK/'build-tools/35.0.1'
 ANDROID_JAR=SDK/'platforms/android-34/android.jar'
 def run(*args):subprocess.run([str(a) for a in args],check=True,cwd=ROOT)
 def configure(target,immersive=True,alpha=False):
+    if target=='android':
+        media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if alpha else 'android-arm64')
+        origin=media/'origin.json'
+        flags=json.loads(origin.read_text()).get('configure',[]) if origin.exists() else []
+        if not all(flag in flags for flag in ('--enable-decoders','--enable-demuxers','--enable-zlib')):
+            raise RuntimeError('Rebuild the expanded Android codec profile first: python tools/build_ffmpeg_android.py'+(' --alpha' if alpha else ''))
     directory=ROOT/'build'/('app-'+target+('-panel' if target=='android' and not immersive else '')+('-alpha' if alpha else ''))
     common=[CMAKE,'-S',ROOT,'-B',directory,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={NINJA}',
         '-DCMAKE_BUILD_TYPE='+('Release' if alpha else 'RelWithDebInfo'),'-DCYVR_PLAYER_WITH_FFMPEG=ON','-DCYVR_PLAYER_BUILD_APP=ON',
@@ -49,6 +56,15 @@ def notices(destination):
             ('MbedTLS-Apache-2.0.txt',ROOT/'.deps/mbedtls/source/LICENSE'),
             ('dependencies.lock.json',ROOT/'dependencies.lock.json')]:
         if source.exists():shutil.copyfile(source,destination/name)
+    for name,source in [('libass-ISC.txt',ROOT/'.deps/subtitles/source/subprojects/libass/COPYING'),
+            ('FreeType-FTL.txt',ROOT/'.deps/subtitles/source/subprojects/freetype2/docs/FTL.TXT'),
+            ('HarfBuzz-MIT.txt',ROOT/'.deps/subtitles/source/subprojects/harfbuzz/COPYING'),
+            ('FriBidi-LGPLv2.1.txt',ROOT/'.deps/subtitles/source/subprojects/fribidi/COPYING'),
+            ('SplatKit-MIT.txt',ROOT/'.deps/splatkit/source/LICENSE'),
+            ('SplatKit-THIRD_PARTY.txt',ROOT/'.deps/splatkit/source/THIRD_PARTY_LICENSES.txt'),
+            ('VMA-MIT.txt',ROOT/'.deps/vma/source/LICENSE.txt')]:
+        if not source.is_file():raise RuntimeError('Missing dependency license: '+name)
+        shutil.copyfile(source,destination/name)
     for folder in [ROOT/'third_party',ROOT/'.deps/ffmpeg/android-arm64/licenses',ROOT/'.deps/ffmpeg/windows/licenses',UI/'third_party',UI/'assets/fonts']:
         if folder.exists():
             for file in folder.rglob('*'):

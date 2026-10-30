@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include "cyvr/player/video_color.hpp"
 
 namespace cyvr::player::android {
 struct ReaderState;
@@ -23,7 +24,7 @@ public:
     ImageLease& operator=(ImageLease&& other) noexcept;
     ImageLease(const ImageLease&) = delete;
     ImageLease& operator=(const ImageLease&) = delete;
-    explicit operator bool() const noexcept { return image_ != nullptr; }
+    explicit operator bool() const noexcept { return image_ != nullptr || buffer_ != nullptr; }
     AImage* image() const noexcept { return image_; }
     // Borrowed AHB, valid until release. Importer must hold the lease in flight.
     AHardwareBuffer* hardware_buffer() const;
@@ -35,12 +36,17 @@ public:
     void release_after_gpu(int release_fd) noexcept;
     std::int64_t pts_us = 0;
     std::uint64_t epoch = 0;
+    VideoColor color;
+    static ImageLease from_buffer(AHardwareBuffer* buffer, int fence, std::shared_ptr<void> owner,
+                                  std::int64_t pts, std::uint64_t generation, VideoColor color);
 private:
     friend class SurfaceDecoder;
     ImageLease(AImage* image, int fence, std::shared_ptr<ReaderState> owner,
                std::int64_t pts, std::uint64_t generation);
     void reset() noexcept;
     AImage* image_ = nullptr;
+    AHardwareBuffer* buffer_ = nullptr;
+    std::shared_ptr<void> cpu_owner_;
     int acquire_fd_ = -1;
     std::shared_ptr<ReaderState> owner_;
 };
@@ -82,6 +88,7 @@ private:
     bool started_ = false;
     bool input_ended_ = false;
     std::shared_ptr<ReaderState> reader_;
+    VideoColor color_;
 };
 } // namespace cyvr::player::android
 #endif

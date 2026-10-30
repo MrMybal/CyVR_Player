@@ -16,9 +16,10 @@ bool has(const std::string& ext, std::initializer_list<const char*> values) {
 }
 FileKind classify_extension(const fs::path& path) {
     const auto ext = lower(path.extension().u8string());
-    if (has(ext,{".mp4",".mkv",".webm",".avi",".mov",".m4v",".ts",".mts",".m2ts",".mpg",".mpeg",".wmv",".flv",".ogv",".vob"})) return FileKind::video;
+    if (has(ext,{".mp4",".mkv",".webm",".avi",".mov",".m4v",".ts",".mts",".m2ts",".mpg",".mpeg",".wmv",".flv",".ogv",".vob",".asf",".divx",".m2v",".m2p",".mxf",".rm",".rmvb",".ogm",".3gp",".3g2",".mjpeg",".mjpg",".nut",".y4m",".ivf",".bik",".hevc",".h264",".av1",".gif"})) return FileKind::video;
+    if (has(ext,{".srt",".ass",".ssa",".vtt",".sub",".sup",".idx",".ttml"})) return FileKind::subtitle;
     if (has(ext,{".mp3",".flac",".ogg",".opus",".aac",".m4a",".wav",".wma",".ac3"})) return FileKind::audio;
-    if (has(ext,{".ply",".spz",".splat",".sog",".lodsplat"})) return FileKind::splat;
+    if (has(ext,{".ply",".spz",".splat",".sog",".lodsplat",".splatseq"})) return FileKind::splat;
     if (has(ext,{".m3u8",".mpd",".m3u",".pls"})) return FileKind::playlist;
     return FileKind::other;
 }

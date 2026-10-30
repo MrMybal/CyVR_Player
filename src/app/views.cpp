@@ -105,6 +105,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                   ? UvRect{0, 0, 1, 1}
                   : eye_rect(StereoLayout(stereo), Eye::left, swap_eyes);
     d.video(picture, {uv.x, uv.y, uv.width, uv.height});
+    if(caption_ready)d.overlay({picture.x+picture.w*caption_rect.x,picture.y+picture.h*caption_rect.y,picture.w*caption_rect.w,picture.h*caption_rect.h});
   };
   if (ui_.interfaceHidden) {
     video({0, 0, 1440, 990}, true);
@@ -114,6 +115,24 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
        muted = Color::hex(light ? 0x48616b : 0xa7b7bf);
   auto accent = Color::hex(light ? 0x126854 : ocean ? 0x95bdff : 0x86e7cf);
   auto surface = Color::hex(light ? 0xc1d3db : ocean ? 0x293e66 : 0x22323b);
+  if(immersive && ui_.compactInterface){
+    d.rect({228,785,984,168},Color::hex(light?0xe4eef1:0x15242d,.96f),20);
+    const auto position=timeline_position();
+    const bool seek=state_.ready && state_.seekable && state_.duration_us>0;
+    const float progress=state_.duration_us>0 ? float(std::clamp(double(position)/double(state_.duration_us),0.,1.)) : 0;
+    const cyvr::Rect track{252,800,936,42};
+    d.rect({track.x,816,track.w,8},surface,4);
+    d.rect({track.x,816,track.w*progress,8},accent,4);
+    if(seek)d.rect({track.x+track.w*progress-9,811,18,18},accent,9);
+    ui_.applicationWidget(1025,track,cyvr::Control::Slider,seek);
+    d.text(252,850,20,clockText(position),white);
+    d.text(1065,850,20,state_.duration_us>0?clockText(state_.duration_us):"--:--:--",muted);
+    button(d,1362,{252,890,155,44},"Previous",false,adjacent_video(-1,false));
+    button(d,1020,{421,890,180,44},state_.playing?"Pause":"Resume",false,state_.ready && !state_.ended);
+    button(d,1363,{615,890,155,44},"Next",false,adjacent_video(1,false));
+    button(d,1360,{910,890,278,44},"Full interface");
+    return true;
+  }
   d.rect({0, 0, 1440, 990},
          Color::hex(light   ? 0xe4eef1
                     : ocean ? 0x141f3b
@@ -122,6 +141,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
          30);
   d.text(32, 22, 34, "CyVR Player", white);
   d.text(270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
+  if(immersive && state_.ready)button(d,1361,{510,22,216,52},"Compact controls");
   button(d, 1060, {740, 22, 160, 52},
          ui_.settings.language == "fr" ? "Français" : "English");
   button(d, 1061, {914, 22, 216, 52},
@@ -164,6 +184,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
         d.text(51, y + 17, 22,
                tr(item.directory                                     ? "FOLDER"
                   : classify_extension(item.name) == FileKind::splat ? "SPLATS"
+                  : classify_extension(item.name) == FileKind::subtitle ? "SUBTITLE"
                                                                      : "VIDEO"),
                accent);
       d.text(195, y + 16, 24, fit(d, item.name, 1010), white);
@@ -195,6 +216,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
             : browse_status_;
     d.text(36, 861, 21, fit(d, status, 980, 21), muted);
   } else if (page_ == 1) {
+    if(tracks_open_){draw_tracks(d);return true;}
     d.text(36, 186, 34,
            fit(d,
                state_.title.empty() ? tr("Your next screening")
@@ -279,10 +301,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
            state_.ready && state_.seekable);
     button(d, 1023, {746, 814, 200, 64}, "Stop", false, state_.ready);
     button(d, 1024, {964, 814, 444, 64}, "Hide interface", false, state_.ready);
-    d.text(36, 891, 19,
-           tr("Development build: audio output and subtitles are not connected "
-              "yet."),
-           Color::hex(light ? 0x865014 : 0xf2c683));
+    button(d,1400,{32,895,650,52},"Tracks, subtitles and chapters",false,state_.ready);
   } else if (page_ == 2) {
     d.text(36, 187, 34, tr("Open a video stream"), white);
     d.text(36, 243, 22, tr("HTTP(S), HLS, RTSP — enter the complete address."),

@@ -1,3 +1,9 @@
+# Current dependency profile — 0.4.5
+
+The actual implemented scope is in the English [README](../README.md). FFmpeg now enables its built-in compatible decoders/demuxers and zlib. Libass (ISC), FreeType (FTL), HarfBuzz (MIT) and FriBidi (LGPL-2.1-or-later) provide subtitle styling/shaping. The pinned SplatKit Vulkan subset and VulkanMemoryAllocator are MIT; the player adapter borrows the host device instead of using their reference Android view. No INRIA noncommercial renderer is included. Exact source archive hashes are in `dependencies.lock.json`; corresponding notices ship in the APK. CyVR_UI retains MIT; CyVR_Player retains GPL-3.0-only.
+
+The remaining sections record the earlier selection rationale and proposed coverage; they are not an assertion that every protocol/format is implemented.
+
 # Choix des bibliothèques pour Meta Quest / Android
 
 Étude du 29 octobre 2026. Les choix ci-dessous sont des recommandations d'architecture ; les performances sur Quest restent à mesurer. Aucune dépendance à Unity, Unreal ou à un SDK applicatif propriétaire Meta n'est proposée. Android, le runtime Quest et les pilotes matériels restent des composants de la plateforme, dont certains sont propriétaires : la contrainte open source peut couvrir le code et les dépendances applicatives, pas rendre le casque lui-même entièrement ouvert.

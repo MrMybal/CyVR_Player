@@ -43,7 +43,7 @@ def main():
     lock = json.loads((ROOT / 'dependencies.lock.json').read_text(encoding='utf-8'))
     dependencies = []
     for entry in lock['external_dependencies']:
-        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49'}:
+        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49','SplatKit Vulkan source','VulkanMemoryAllocator source'} and not entry['name'].startswith('Subtitle source: '):
             continue
         source = ROOT / entry['archive']
         data = source.read_bytes()
@@ -51,8 +51,8 @@ def main():
             raise RuntimeError('Dependency archive checksum mismatch: ' + source.name)
         files['dependencies/' + source.name] = data
         dependencies.append(entry['name'])
-    if len(dependencies) != 3:
-        raise RuntimeError('Expected FFmpeg, Mbed TLS and OpenXR source archives')
+    if len(dependencies) != 9:
+        raise RuntimeError('Expected media, subtitle, Gaussian and OpenXR source archives')
     files['build-config/ffmpeg-alpha.json'] = (ROOT / '.deps/ffmpeg/android-arm64-alpha/origin.json').read_bytes()
     metadata = {
         'version': version,
@@ -85,14 +85,16 @@ README, Git for Windows (bash), and 7-Zip. Configure ANDROID_HOME and JAVA_HOME.
 Clang with the Windows SDK is also needed for FFmpeg's host compilation tests.
 Build tools and the Android platform/runtime are installed separately.
 
-1. Copy the FFmpeg and Mbed TLS archives from `dependencies` into
+1. Copy all supplied source archives from `dependencies` into
    `CyVR_Player/.deps/downloads` without renaming them.
 2. In `CyVR_Player`, run `python tools/prepare_android_media.py`. It verifies
    and extracts these exact sources and downloads the pinned GNU make tool.
 3. In `CyVR_UI`, run `powershell -NoProfile -File tools/fetch-deps.ps1` to obtain
    the hash-pinned OpenXR Android loader AAR. The matching full loader SDK source
    is supplied under `dependencies`; its version/commit/hash are in the lockfile.
-4. In `CyVR_Player`, run `python tools/build_ffmpeg_android.py --alpha`.
+4. In `CyVR_Player`, run `python tools/prepare_splats.py`,
+   `python tools/build_subtitles.py --target android`, then
+   `python tools/build_ffmpeg_android.py --alpha`.
    The script builds Mbed TLS and FFmpeg in separate Alpha directories. It maps
    compiler file paths and substitutes portable variables in the generated
    FFMPEG_CONFIGURATION string before compilation. Original dependency source

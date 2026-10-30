@@ -481,6 +481,48 @@ int main(int argc, char **argv) {
       }
       encoded.destroyTarget(source);
     }
+    // PQ/HLG reference gray steps through the actual video shader and all filters.
+    for(int transfer:{6,7}){
+      VulkanRenderer encoded(gpu);encoded.initialize(VK_FORMAT_R8G8B8A8_UNORM,assets);
+      auto source=encoded.createTarget(160,32);
+      DrawList steps;
+      const int levels[]{0,64,128,192,255};
+      for(int i=0;i<5;++i){const float v=levels[i]/255.f;steps.rect({float(i*32),0,32,32},{v,v,v,1});}
+      encoded.draw(source,steps);readable(gpu,source.image);
+      for(int quality=0;quality<4;++quality){
+        ImageSettings settings;settings.quality=quality;
+        VideoColor color;color.standard=6;color.transfer=transfer;color.peak_nits=1000;
+        VideoView view;view.kind=1;
+        const auto push=video_push({0,0,1,1},ImageSettings{},0,view,color);
+        auto target=renderer.createTarget(160,32);
+        std::unique_ptr<ImageProcessor> processor;
+        {
+          ProjectionProbe projection(gpu,assets,source.view);
+          if(quality){
+            const VideoExtent input=quality==1?VideoExtent{160,32}:VideoExtent{80,16};
+            processor=std::make_unique<ImageProcessor>(gpu,VK_FORMAT_R8G8B8A8_SRGB,assets,input,VideoExtent{160,32},quality);
+            projection.run(processor->source_image(),input,push,true,[&](VkCommandBuffer cmd){processor->record(cmd,target.image,settings,0,false);});
+          }else projection.run(target.image,{160,32},push);
+          const auto pixels=renderer.readback(target);
+          int previous=-1;
+          for(int i=0;i<5;++i){
+            const double e=levels[i]/255.;double nits;
+            if(transfer==6){const auto p=std::pow(e,32./2523.);nits=10000*std::pow(std::max(p-3424./4096.,0.)/(2413./128.-2392./128.*p),16384./2610.);}
+            else{const auto scene=e<=.5?e*e/3.:(std::exp((e-.55991073)/.17883277)+.28466892)/12.;nits=1000*std::pow(scene,1.2);}
+            const auto x=nits/203.,white=1000./203.;
+            const auto linear=std::clamp(x*(1+x/(white*white))/(1+x),0.,1.);
+            const int expected=int(std::round(255*(linear<=.0031308?12.92*linear:1.055*std::pow(linear,1./2.4)-.055)));
+            const auto at=(16*160+i*32+16)*4;
+            for(int channel=0;channel<3;++channel)
+              if(std::abs(int(pixels[at+channel])-expected)>3)throw std::runtime_error("HDR PQ/HLG reference mismatch: transfer="+std::to_string(transfer)+" filter="+std::to_string(quality)+" expected="+std::to_string(expected)+" got="+std::to_string(pixels[at+channel]));
+            if(int(pixels[at])<previous || pixels[at+3]!=255)throw std::runtime_error("HDR gray steps lost ordering or coverage");
+            previous=pixels[at];++checks;
+          }
+        }
+        processor.reset();renderer.destroyTarget(target);
+      }
+      encoded.destroyTarget(source);
+    }
     if (argc == 3 && std::string(argv[2]) == "--benchmark") {
       for (int quality = 1; quality <= 3; ++quality) {
         ImageSettings settings;

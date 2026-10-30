@@ -18,7 +18,11 @@ This license applies to original CyVR Player source code, shaders, build
 scripts and documentation, unless an individual file states otherwise.
 Third-party code, assets and generated adaptations retain their respective
 copyright notices and licenses. This includes CyVR_UI, FFmpeg, Mbed TLS,
-OpenXR, CAS, FSR 1 and Snapdragon GSR 1. See dependencies.lock.json, the
+OpenXR, CAS, FSR 1, Snapdragon GSR 1, libass, FreeType, HarfBuzz, FriBidi,
+SplatKit and VulkanMemoryAllocator. See dependencies.lock.json, the
 original third-party files and the notices packaged in assets/licenses.
+
+Portions of this software are copyright (C) 2025 The FreeType Project
+(https://freetype.org). All rights reserved.
 
 Project: https://github.com/MrMybal/CyVR_Player

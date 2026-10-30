@@ -241,14 +241,15 @@ struct VideoRenderer::Impl {
     conversion.xChromaOffset = fmt.suggestedXChromaOffset;
     conversion.yChromaOffset = fmt.suggestedYChromaOffset;
     conversion.chromaFilter = VK_FILTER_NEAREST;
-    vkCheck(
+    const bool rgb=fmt.format==VK_FORMAT_R8G8B8A8_UNORM || fmt.format==VK_FORMAT_A2B10G10R10_UNORM_PACK32 || fmt.format==VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    if(!rgb)vkCheck(
         create_conversion(gpu.device, &conversion, nullptr, &out.conversion),
         "AHB YCbCr conversion");
     VkSamplerYcbcrConversionInfo converted{
         VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO};
     converted.conversion = out.conversion;
     VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler.pNext = &converted;
+    sampler.pNext = out.conversion ? &converted : nullptr;
     sampler.magFilter = VK_FILTER_NEAREST;
     sampler.minFilter = VK_FILTER_NEAREST;
     sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -257,7 +258,7 @@ struct VideoRenderer::Impl {
     vkCheck(vkCreateSampler(gpu.device, &sampler, nullptr, &out.sampler),
             "AHB sampler");
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view.pNext = &converted;
+    view.pNext = out.conversion ? &converted : nullptr;
     view.image = out.image;
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
     view.format = fmt.format;
@@ -448,13 +449,13 @@ struct VideoRenderer::Impl {
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
     AImageCropRect crop{};
-    if (AImage_getCropRect(lease.image(), &crop) != AMEDIA_OK)
-      crop = {0, 0, int32_t(width), int32_t(height)};
+    if (!lease.image() || AImage_getCropRect(lease.image(), &crop) != AMEDIA_OK)
+      crop = {0, 0, int32_t(source.width), int32_t(source.height)};
     const auto push = video_push(
         {float(crop.left) / source.width, float(crop.top) / source.height,
          float(crop.right - crop.left) / source.width,
          float(crop.bottom - crop.top) / source.height},
-        settings, stereo, mapping);
+        settings, stereo, mapping, lease.color);
     vkCmdPushConstants(command, source.pipeline_layout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(command, 3, 1, 0, 0);

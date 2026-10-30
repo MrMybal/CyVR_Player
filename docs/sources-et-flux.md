@@ -1,3 +1,9 @@
+# Current source/track support — 0.4.5
+
+See the [README container/audio/subtitle section](../README.md#containers-audio-and-subtitles) for the current profile. Seekable-source video/audio/subtitle track changes, chapters, external subtitles, AAudio output and software video fallback are implemented. Software decode still depends on the compiled codec and available mobile CPU. Android does not currently bundle libxml2/DASH, libSRT, SMB/NFS or DRM. A desktop integration result must not be treated as Android protocol coverage.
+
+The notes below document earlier design and validation stages.
+
 # Fichiers, explorateur interne et flux
 
 Ces modules restent utilisables sans interface. L'application CyVR_UI les appelle maintenant depuis des workers de stockage/média ; le thread OpenXR consomme les images prêtes. Voir [interface.md](interface.md).

@@ -8,6 +8,7 @@
 
 namespace cyvr::player {
 namespace {
+double controls_now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 std::string keyboard(bool shift, bool symbols) {
   if (symbols)
     return R"~(!@#$%^&*()[]{}<>+=_?:;/.,~-|\"'`)~";
@@ -135,7 +136,24 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
     if (!valid) {
       zoom_gesture_[hand] = false;
       stick_latched_[hand] = false;
+      controller_seen_[hand] = false;
       return false;
+    }
+    const bool gesture = squeeze > .65f && trigger > .55f && session_.state().ready;
+    const auto &old = last_controller_pose_[hand];
+    const float orientation = std::abs(old.orientation.x*pose.orientation.x + old.orientation.y*pose.orientation.y + old.orientation.z*pose.orientation.z + old.orientation.w*pose.orientation.w);
+    const bool moved = !controller_seen_[hand] || cyvr::length(pose.position-old.position) > .012f || orientation < .99985f;
+    const bool input = std::abs(stick.x) > .2f || std::abs(stick.y) > .2f || trigger > .1f || squeeze > .1f || std::abs(trigger-last_trigger_[hand]) > .05f || std::abs(squeeze-last_grip_[hand]) > .05f;
+    if (moved) { last_controller_pose_[hand] = pose; controller_seen_[hand] = true; }
+    last_trigger_[hand]=trigger; last_grip_[hand]=squeeze;
+    if (!gesture && (moved || input)) {
+      if (ui_.interfaceHidden && (trigger > .1f || squeeze > .1f)) wake_gesture_[hand]=true;
+      control_activity();
+    }
+    if(gesture && !ui_.interfaceHidden)controls_.activity(controls_now());
+    if (wake_gesture_[hand]) {
+      if (trigger <= .1f && squeeze <= .1f) wake_gesture_[hand]=false;
+      return true;
     }
     if (hand == 0) {
       if (std::abs(stick.x) < .3f)
@@ -146,8 +164,6 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
       }
     } else if (std::abs(stick.y) > .2f)
       video_input(0, stick.y * dt);
-    const bool gesture =
-        squeeze > .65f && trigger > .55f && session_.state().ready;
     if (gesture) {
       if (!zoom_gesture_[hand]) {
         zoom_start_[hand] = image.zoom;
@@ -174,6 +190,7 @@ PlayerApplication::~PlayerApplication() {
   ui_.applicationTick = {};
   ui_.applicationBack = {};
   ui_.applicationController = {};
+  ui_.compactInterface = false;
 }
 void PlayerApplication::browse(std::string path) {
   directory_ = std::move(path);
@@ -187,6 +204,12 @@ void PlayerApplication::browse(std::string path) {
 void PlayerApplication::open(std::string location, std::string title) {
   cancel_scrub();
   show_interface();
+  if (std::none_of(playlist_.begin(),playlist_.end(),[&](const auto& item){return item.location==location;})) {
+    playlist_.clear();
+    if (std::any_of(entries_.begin(),entries_.end(),[&](const auto& item){return item.location==location;}))
+      for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat))playlist_.push_back(item);
+  }
+  controls_.compact(controls_now());
   if (title.empty())
     title = location.find("://") != std::string::npos
                 ? "Video stream"
@@ -204,11 +227,14 @@ void PlayerApplication::open(std::string location, std::string title) {
   ui_.invalidate();
 }
 void PlayerApplication::tick() {
+  const double activity_now=controls_now();
+  if (controls_.mode()==PlaybackControls::Mode::hidden && !ui_.interfaceHidden)controls_.activity(activity_now);
   if (page_ != int(ui_.page)) {
     cancel_scrub();
     page_ = int(ui_.page);
     state_dirty_ = true;
   }
+  const bool was_ready=state_.ready;
   auto state = session_.state();
   if (state.revision != state_.revision) {
     // Position changes alone are checkpointed every five seconds. Avoid
@@ -230,6 +256,8 @@ void PlayerApplication::tick() {
       browser_revision_ = browser_->revision;
       entries_ = browser_->entries;
       browse_status_ = browser_->status;
+      if(playlist_.empty() && std::any_of(entries_.begin(),entries_.end(),[&](const auto& item){return item.location==source_;}))
+        for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat))playlist_.push_back(item);
       if (browse_status_ != "Reading folder...")
         offset_ = std::min(offset_, entries_.empty()
                                         ? 0
@@ -269,6 +297,12 @@ void PlayerApplication::tick() {
     last_performance_update_ = now;
     ui_.invalidate();
   }
+  const bool immersive_video=ui_.presentation==cyvr::Presentation::Immersive && state_.ready;
+  controls_.update(immersive_video,activity_now,ui_.interacting() || scrubbing_ || ui_.modalOpen);
+  if(tracks_open_ && state_.ready && !was_ready)controls_.expand(activity_now);
+  const bool compact=immersive_video && controls_.mode()!=PlaybackControls::Mode::full;
+  if(ui_.compactInterface!=compact){ui_.compactInterface=compact;ui_.invalidate();}
+  if(immersive_video)ui_.setInterfaceHidden(controls_.mode()==PlaybackControls::Mode::hidden);
   if ((state_dirty_ && now - last_save_ > .5) ||
       (state_.playing && now - last_save_ >= 5.)) {
     save();
@@ -310,8 +344,11 @@ void PlayerApplication::text(char c) {
   state_dirty_ = true;
 }
 bool PlayerApplication::action(int id) {
+  control_activity();
   cancel_scrub();
+  if(id>=1400 && id<1440)return track_action(id);
   if (id >= 1000 && id <= 1003) {
+    controls_.expand(controls_now());
     page_ = id - 1000;
     ui_.page = cyvr::Page(page_);
     state_dirty_ = true;
@@ -338,10 +375,10 @@ bool PlayerApplication::action(int id) {
     if (item.directory) {
       parents_.push_back(directory_);
       browse(item.location);
-    } else if (classify_extension(item.name) == FileKind::splat)
-      ui_.setToast(std::string(tr(
-          "Gaussian Splatting loading and rendering are not connected yet.")));
-    else
+    } else if(classify_extension(item.name)==FileKind::subtitle){
+      if(session_.external_subtitle(item.location)){page_=1;ui_.page=cyvr::Page(1);tracks_open_=true;track_tab_=2;controls_.expand(controls_now());}
+      else ui_.setToast(std::string(tr("Open a seekable video before choosing subtitles.")));
+    } else
       open(item.location, item.name);
   } else if (id == 1020) {
     resume_playing_ = !state_.playing;
@@ -359,8 +396,16 @@ bool PlayerApplication::action(int id) {
     preview_ready = false;
     session_.stop();
   } else if (id == 1024) {
-    if (session_.state().ready)
+    if (session_.state().ready) {
+      controls_.hide();
       ui_.setInterfaceHidden(true);
+    }
+  } else if (id == 1360) {
+    controls_.expand(controls_now()); ui_.compactInterface=false;
+  } else if (id == 1361) {
+    controls_.compact(controls_now()); ui_.compactInterface=true;
+  } else if (id == 1362 || id == 1363) {
+    adjacent_video(id==1362 ? -1 : 1,true);
   } else if (id >= 1030 && id <= 1032)
     stereo = id - 1030;
   else if (id >= 1040 && id <= 1042)
@@ -447,6 +492,8 @@ ApplicationState PlayerApplication::snapshot() const {
   s.half_stereo = half_stereo;
   s.swap_eyes = swap_eyes;
   s.image = image;
+  s.tracks=session_.selection();
+  s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
   s.display_tab = display_tab_;
   s.shift = shift_;
   s.symbols = symbols_;
@@ -482,6 +529,7 @@ bool PlayerApplication::restore(bool resume_media) {
   swap_eyes = s.swap_eyes;
   image = s.image;
   display_tab_ = s.display_tab;
+  tracks_open_=s.tracks_open;track_tab_=s.track_tab;track_offset_=s.track_offset;
   shift_ = s.shift;
   symbols_ = s.symbols;
   source_ = s.source;
@@ -489,7 +537,7 @@ bool PlayerApplication::restore(bool resume_media) {
   requested_position_ = s.position_us;
   resume_playing_ = s.playing;
   if (resume_media && !source_.empty())
-    session_.open(source_, title_, s.position_us, s.playing);
+    session_.open(source_, title_, s.position_us, s.playing,s.tracks);
   ui_.invalidate();
   return true;
 }
@@ -532,6 +580,7 @@ void PlayerApplication::cancel_scrub() {
   ui_.invalidate();
 }
 bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
+  control_activity();
   if (id >= 1340 && id <= 1347) {
     if (phase == cyvr::SliderPhase::Cancel || !std::isfinite(fraction))
       return true;
@@ -603,7 +652,25 @@ std::int64_t PlayerApplication::timeline_position() const {
   const auto media = session_.state();
   return media.seeking ? media.seek_target_us : media.position_us;
 }
-bool PlayerApplication::show_interface() { return ui_.revealInterface(); }
+void PlayerApplication::control_activity() {
+  controls_.activity(controls_now());
+  if(ui_.interfaceHidden)ui_.revealInterface();
+  if(ui_.presentation==cyvr::Presentation::Immersive && session_.state().ready)
+    ui_.compactInterface=controls_.mode()!=PlaybackControls::Mode::full;
+}
+bool PlayerApplication::show_interface() {
+  const bool hidden=ui_.interfaceHidden;
+  control_activity();
+  return hidden;
+}
+bool PlayerApplication::adjacent_video(int direction, bool play) {
+  const auto it=std::find_if(playlist_.begin(),playlist_.end(),[&](const auto& item){return item.location==source_;});
+  if(it==playlist_.end())return false;
+  const auto index=std::distance(playlist_.begin(),it)+direction;
+  if(index<0 || index>=static_cast<std::ptrdiff_t>(playlist_.size()))return false;
+  if(play){const auto item=playlist_[std::size_t(index)];open(item.location,item.name);}
+  return true;
+}
 void PlayerApplication::video_input(float seek, float zoom, float x, float y) {
   if (seek != 0) {
     const auto media = session_.state();

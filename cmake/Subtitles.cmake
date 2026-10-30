@@ -1,0 +1,15 @@
+if(ANDROID)
+    set(subtitle_platform android)
+else()
+    set(subtitle_platform windows)
+endif()
+set(CYVR_SUBTITLE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.deps/subtitles/${subtitle_platform}" CACHE PATH "libass subtitle libraries")
+foreach(component ass freetype fribidi harfbuzz)
+    add_library(cyvr_subtitle_${component} STATIC IMPORTED)
+    set_target_properties(cyvr_subtitle_${component} PROPERTIES
+        IMPORTED_LOCATION "${CYVR_SUBTITLE_ROOT}/lib/lib${component}.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${CYVR_SUBTITLE_ROOT}/include")
+endforeach()
+add_library(cyvr_subtitle_render STATIC src/subtitle_rasterizer.cpp)
+target_link_libraries(cyvr_subtitle_render PUBLIC cyvr_player_media cyvr_subtitle_ass cyvr_subtitle_freetype cyvr_subtitle_fribidi cyvr_subtitle_harfbuzz)
+set_target_properties(cyvr_subtitle_render PROPERTIES POSITION_INDEPENDENT_CODE ON)
