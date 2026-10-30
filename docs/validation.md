@@ -1,4 +1,12 @@
-# Current validation — 0.4.9 (30 October 2026)
+# Current validation — 0.4.10 (30 October 2026)
+
+- Windows: ten CTest suites pass. New application checks cover opt-in detection, on/off toggling, disabled detection across late probing and new opens, Detect once without enabling, manual override priority, checkpoint/host restoration, old-state migration, VR180 slider/stick/button/trigger zoom limits, saved 0.25× zoom and normal limits after leaving VR180. Existing ISO integration tests still pass.
+- PC and Quest 3: **933 Vulkan image checks** pass, including **240 new VR180 zoom-out cases**. Independent CPU rays verify visible/transparent coverage at 0.25× and 0.5×, mono/SBS/TB eye isolation, horizontal positioning and a hidden rear hemisphere across Native/CAS/FSR/GSR. The English/French format controls were rendered and visually inspected.
+- Both Android Alpha variants compile and pass package checks. The hybrid 0.4.10 update is installed on Quest with matching APK hash; the default 2D launch is verified. The user's saved format is retained and automatic detection stays disabled until explicitly enabled.
+
+Synthetic checks verify rendering and shared UI/state behaviour; worn-headset controller comfort and the user's original sources remain to be validated.
+
+## 0.4.9 validation (30 October 2026)
 
 - Windows: all ten CTest suites pass. Disc integration tests decode four original authored ISO fixtures: a two-title DVD with two audio languages and four chapters; a DVD with bitmap subtitles and independently timed cells; a native UDF Blu-ray ISO; and three Blu-ray playlists including a two-clip title with reset source timestamps. Complete frame counts, monotonic timelines, subtitle palette/alpha, seeks, title/track selection, pause, checkpoint/host restoration, descriptor slices, HTTP ranges and malformed selections/images pass. The disc-title panel was rendered through Vulkan and visually inspected in English and French.
 - Quest 3: the authored discs decode correctly, including **200 / 275 DVD frames**, **144 / 288 Blu-ray frames**, bitmap subtitles, title/audio switches, host restoration and DVD/Blu-ray seeks. A descriptor-based DVD open also passes.

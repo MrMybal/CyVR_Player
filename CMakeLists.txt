@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(CyVR_Player VERSION 0.4.9 LANGUAGES CXX)
+project(CyVR_Player VERSION 0.4.10 LANGUAGES CXX)
 
 option(CYVR_PLAYER_BUILD_TESTS "Build portable media core tests" ON)
 option(CYVR_PLAYER_BUILD_SHADERS "Compile Vulkan 1.1 post-processing kernels" ON)

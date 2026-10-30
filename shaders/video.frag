@@ -79,6 +79,9 @@ void main(){
         }
     }
     local=zoomImage(local,crop.view);
+    // Zooming VR180 out reveals space outside the captured hemisphere. Keep
+    // its edge colour for reconstruction taps, but never extend it into space.
+    if(crop.view.x<1. && kind!=4 && (any(lessThan(local,vec2(0)))||any(greaterThan(local,vec2(1)))))coverage=0.;
     if(kind==4)local.x=fract(local.x);
     vec2 halfPixel=.5*eyes/(vec2(textureSize(video,0))*crop.uvRect.zw);
     local=clamp(local,halfPixel,1.-halfPixel);

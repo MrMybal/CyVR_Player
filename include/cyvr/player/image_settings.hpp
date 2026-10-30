@@ -18,7 +18,7 @@ struct ImageSettings {
     contrast = bound(contrast, .5f, 1.5f, 1);
     saturation = bound(saturation, 0, 2, 1);
     gamma = bound(gamma, .5f, 2, 1);
-    zoom = bound(zoom, 1, 4, 1);
+    zoom = bound(zoom, .25f, 4, 1);
     pan_x = bound(pan_x, -1, 1, 0);
     pan_y = bound(pan_y, -1, 1, 0);
     sharpness = bound(sharpness, 0, 1, .5f);

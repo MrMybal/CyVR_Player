@@ -139,10 +139,12 @@ private:
   int display_tab_{};
   int cinema_tab_{};
   bool format_manual_{};
+  bool auto_format_{};
   std::uint64_t format_media_id_{};
   int format_track_{-1};
   DetectedVideoLayout detected_layout_;
-  void refresh_video_format();
+  void refresh_video_format(bool force = false);
+  float minimum_zoom() const { return projection==1 ? .25f : 1.f; }
   bool zoom_gesture_[2]{}, stick_latched_[2]{};
   PlaybackControls controls_;
   std::vector<BrowserItem> playlist_;

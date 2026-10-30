@@ -101,6 +101,7 @@ bool save_application_state(const std::string &path,
     for(float value:{ambilight.intensity,ambilight.spread,ambilight.smoothing,ambilight.saturation,ambilight.inset}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
     c.put(std::uint64_t(0x464d5431));c.put(s.format_manual?1:0);
     c.put(std::uint64_t(0x44534331));c.put(std::clamp(s.tracks.disc_title,-1,4095)+1);c.put(std::clamp(s.tracks.disc_angle,0,8));
+    c.put(std::uint64_t(0x41555431));c.put(s.auto_format?1:0);
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -202,6 +203,7 @@ load_application_state(const std::string &path) noexcept {
             s.ambilight.sanitize();
             if(c.cursor<c.bytes.size()){if(c.get()!=0x464d5431)return {};s.format_manual=c.get()!=0;}
             if(c.cursor<c.bytes.size()){if(c.get()!=0x44534331)return {};const auto title=c.get(),angle=c.get();if(title>4096 || angle>8)return {};s.tracks.disc_title=int(title)-1;s.tracks.disc_angle=int(angle);}
+            if(c.cursor<c.bytes.size()){if(c.get()!=0x41555431)return {};const auto enabled=c.get();if(enabled>1)return {};s.auto_format=enabled!=0;}
           }
         }
       }

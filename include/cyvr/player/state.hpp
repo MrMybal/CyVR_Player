@@ -19,6 +19,7 @@ struct ApplicationState {
   AmbilightSettings ambilight;
   int cinema_tab{};
   bool format_manual{true}; // Legacy checkpoints preserve their selected format.
+  bool auto_format{}; // Opt in; retain manual formats when upgrading old state.
   TrackSelection tracks;
   bool tracks_open{};int track_tab{},track_offset{};
 };

@@ -190,6 +190,7 @@ int main() {
       state.image.exposure = 1;
       state.image.quality = 2;
       state.image.zoom = 2.25f;
+      state.auto_format=true;
       state.display_tab = 2;
       state.tracks={3,5,8,"content://test/document/captions"};
       state.tracks.clearkey_file="content://test/document/keys.jwk";
@@ -199,6 +200,15 @@ int main() {
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
+      if(!loaded || !loaded->auto_format)throw std::runtime_error("Auto-detection preference lost during state transfer");
+      {
+        std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();
+        const auto tag=bytes.find(std::string("1TUA\0\0\0\0",8));if(tag==std::string::npos)throw std::runtime_error("Detection preference extension missing");bytes.resize(tag);
+        std::ofstream old(platform.state_file,std::ios::binary|std::ios::trunc);old.write(bytes.data(),bytes.size());old.close();
+        const auto migrated=load_application_state(platform.state_file);
+        if(!migrated || migrated->auto_format || migrated->stereo!=state.stereo || migrated->projection!=state.projection || migrated->tracks.disc_title!=state.tracks.disc_title)throw std::runtime_error("Legacy detection migration changed manual layout or disc selection");
+        if(!save_application_state(platform.state_file,state))throw std::runtime_error("Detection checkpoint restore failed");
+      }
       if(!loaded || loaded->tracks.disc_title!=7 || loaded->tracks.disc_angle!=1)throw std::runtime_error("Disc selection lost during activity transfer");
       if(!loaded || loaded->cinema!=state.cinema || loaded->cinema_tab!=2 || loaded->ambilight!=state.ambilight)throw std::runtime_error("Cinema settings were not retained across activity replacement");
       if (!loaded || loaded->source != state.source ||
@@ -239,8 +249,21 @@ int main() {
       if (save_application_state(platform.state_file, state) ||
           !load_application_state(platform.state_file))
         throw std::runtime_error("Oversized state replaced the valid state");
-      // A new media resets auto format, while explicit choices survive late
-      // inspection, pause/seek and host replacement. Re-detection is available.
+      // The preference is opt-in, and opening a media cannot enable it.
+      if(app.snapshot().auto_format)throw std::runtime_error("Auto-detection was enabled by default");
+      app.action(1032);app.action(1042);
+      app.open((root / "timeline.gif").u8string(),"Fixture_180_LR.gif");
+      wait([&]{return app.session().state().ready && app.session().state().title=="Fixture_180_LR.gif";});app.tick();
+      if(app.stereo!=2 || app.projection!=2 || app.snapshot().auto_format)throw std::runtime_error("Disabled detection changed manual format on open/probe");
+      app.action(1053);
+      if(app.stereo!=1 || app.projection!=1 || app.snapshot().auto_format)throw std::runtime_error("One-shot detection enabled the preference");
+      app.action(1032);app.action(1042);app.save();
+      if(!app.restore())throw std::runtime_error("Disabled detection restore failed");
+      wait([&]{return app.session().state().ready;});app.tick();
+      if(app.snapshot().auto_format || app.stereo!=2 || app.projection!=2)throw std::runtime_error("Disabled preference or manual format lost across hosts");
+      app.action(1054);
+      if(!app.snapshot().auto_format || app.stereo!=1 || app.projection!=1)throw std::runtime_error("Enabling detection did not apply the current format");
+      // Opt-in auto mode still permits per-file manual choices.
       app.open((root / "timeline.gif").u8string(),"Fixture_180_LR.gif");
       wait([&]{return app.session().state().ready && app.session().state().title=="Fixture_180_LR.gif";});app.tick();
       if(app.stereo!=1 || app.projection!=1 || app.snapshot().format_manual)throw std::runtime_error("Filename layout was not applied at open");
@@ -253,6 +276,11 @@ int main() {
       app.open((root / "timeline.gif").u8string());
       wait([&] { return app.session().state().ready; });
       app.tick();if(app.stereo || app.projection || app.half_stereo || app.swap_eyes)throw std::runtime_error("New ordinary video retained the previous spherical/stereo format");
+      app.action(1054);app.action(1032);app.action(1041);app.action(1051);app.action(1052);
+      app.open((root / "timeline.gif").u8string(),"Other_360_LR.gif");
+      wait([&]{return app.session().state().ready && app.session().state().title=="Other_360_LR.gif";});app.tick();
+      if(app.snapshot().auto_format || app.stereo!=2 || app.projection!=1 || !app.half_stereo || !app.swap_eyes)throw std::runtime_error("Disabled detection did not retain the complete manual layout for the next file");
+      app.action(1030);app.action(1040);
       const auto duration = app.session().state().duration_us;
       if (duration != 2000000 || !app.session().state().seekable)
         throw std::runtime_error("Timeline fixture metadata is invalid");
@@ -314,6 +342,18 @@ int main() {
       app.video_input(0, 100, 100, -100);
       if (app.image.zoom != 4 || app.image.pan_x != 1 || app.image.pan_y != -1)
         throw std::runtime_error("Image transform bounds failed");
+      app.action(1041);app.action(1333);app.video_input(0,-100);
+      if(app.image.zoom!=.25f)throw std::runtime_error("VR180 button/stick zoom-out limit failed");
+      model.handleApplicationSlider(1344,0,SliderPhase::Commit);
+      if(app.image.zoom!=.25f)throw std::runtime_error("VR180 slider zoom-out limit failed");
+      app.action(1333);
+      model.applicationController(1,{},.8f,.8f,{{0,.5f,0},{}},true);
+      model.applicationController(1,{},.8f,.8f,{{0,.1f,0},{}},true);
+      model.applicationController(1,{},0,0,{},false);
+      if(app.image.zoom!=.25f)throw std::runtime_error("VR180 grip/trigger zoom-out limit failed");
+      app.save();const auto zoomState=load_application_state(platform.state_file);
+      if(!zoomState || zoomState->image.zoom!=.25f || zoomState->auto_format)throw std::runtime_error("VR180 zoom or disabled detection lost in checkpoint");
+      app.action(1040);if(app.image.zoom!=1)throw std::runtime_error("Leaving VR180 retained an invalid cinema zoom");
       app.action(1330);
       app.action(1001);
       auto drag = [&](float from, float to, bool cancel = false) {

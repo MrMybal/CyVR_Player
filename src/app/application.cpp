@@ -171,7 +171,7 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
       }
       image.zoom = std::clamp(zoom_start_[hand] +
                                   (pose.position.y - zoom_y_[hand]) * 4.f,
-                              1.f, 4.f);
+                              minimum_zoom(), 4.f);
       state_dirty_ = true;
       ui_.invalidate();
     }
@@ -220,7 +220,7 @@ void PlayerApplication::open(std::string location, std::string title) {
   resume_playing_ = true;
   preview_ready = false;
   render_monitor.reset();
-  format_manual_=false;format_track_=-1;
+  format_manual_=!auto_format_;format_track_=-1;
   format_media_id_=session_.open(std::move(location),std::move(title));
   refresh_video_format();
   page_ = 1;
@@ -228,10 +228,11 @@ void PlayerApplication::open(std::string location, std::string title) {
   state_dirty_ = true;
   ui_.invalidate();
 }
-void PlayerApplication::refresh_video_format(){
+void PlayerApplication::refresh_video_format(bool force){
+  if(!auto_format_ && !force)return;
   const bool current=state_.ready && state_.media_id==format_media_id_ && !state_.volumetric;
   detected_layout_=detect_video_layout(source_,title_,current?state_.layout:VideoLayoutHints{},current?state_.width:0,current?state_.height:0,current?state_.pixel_aspect:1,current && state_.multiview);
-  if(!format_manual_){stereo=detected_layout_.stereo;projection=detected_layout_.projection;half_stereo=detected_layout_.half;swap_eyes=detected_layout_.swap;++processing_request;state_dirty_=true;}
+  if(force || !format_manual_){stereo=detected_layout_.stereo;projection=detected_layout_.projection;half_stereo=detected_layout_.half;swap_eyes=detected_layout_.swap;image.zoom=std::clamp(image.zoom,minimum_zoom(),4.f);++processing_request;state_dirty_=true;}
   ui_.invalidate();
 }
 void PlayerApplication::tick() {
@@ -433,7 +434,8 @@ bool PlayerApplication::action(int id) {
     stereo = id - 1030;
   else if (id >= 1040 && id <= 1042)
     projection = id - 1040;
-  else if(id==1053){format_manual_=false;refresh_video_format();}
+  else if(id==1053){format_manual_=!auto_format_;refresh_video_format(true);}
+  else if(id==1054){auto_format_=!auto_format_;format_manual_=!auto_format_;if(auto_format_)refresh_video_format();}
   else if (id == 1050)
     ++video_placement_request;
   else if (id == 1051)
@@ -505,6 +507,7 @@ bool PlayerApplication::action(int id) {
     }
   } else
     return false;
+  image.zoom=std::clamp(image.zoom,minimum_zoom(),4.f);
   ui_.invalidate();
   state_dirty_ = true;
   return true;
@@ -528,6 +531,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.swap_eyes = swap_eyes;
   s.image = image;
   s.format_manual=format_manual_;
+  s.auto_format=auto_format_;
   s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
@@ -560,7 +564,7 @@ bool PlayerApplication::restore(bool resume_media) {
   page_ = s.page;
   ui_.page = cyvr::Page(page_);
   offset_ = s.offset;
-  format_manual_=s.format_manual;format_track_=-1;
+  format_manual_=s.format_manual;auto_format_=s.auto_format;format_track_=-1;
   stereo = s.stereo;
   projection = s.projection;
   half_stereo = s.half_stereo;
@@ -658,7 +662,7 @@ bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
       image.gamma = .5f + f * 1.5f;
       break;
     case 1344:
-      image.zoom = 1 + f * 3;
+      image.zoom = minimum_zoom() + f * (4-minimum_zoom());
       break;
     case 1345:
       image.pan_x = -1 + f * 2;
@@ -739,6 +743,7 @@ void PlayerApplication::video_input(float seek, float zoom, float x, float y) {
                  std::int64_t(seek * 1000000)));
   }
   image.zoom += zoom;
+  image.zoom = std::clamp(image.zoom,minimum_zoom(),4.f);
   image.pan_x += x;
   image.pan_y += y;
   image.sanitize();

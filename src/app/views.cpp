@@ -362,13 +362,14 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
              stereo != 0);
       button(d, 1052, {952, 652, 452, 68}, "Swap eyes", swap_eyes, stereo != 0);
 
-      button(d, 1331, {36, 758, 215, 60}, "Zoom out");
-      button(d, 1332, {267, 758, 215, 60}, "Zoom in");
-      button(d, 1333, {498, 758, 250, 60}, "Fit image");
-      button(d,1053,{770,758,634,60},"Detect video format");
-      const char* detection=format_manual_?"Manual video format":detected_layout_.ambiguous?"Projection not recognised; select the format manually.":detected_layout_.evidence==3?"Automatic format: decoded stereo views":detected_layout_.evidence==2?"Automatic format: video metadata":detected_layout_.evidence==1?"Automatic format: filename hints":"Automatic format: standard 2D";
-      d.text(36,837,18,tr(detection),accent);
-      d.text(36, 872, 20, tr("Left stick: seek 10 s / Right stick: zoom"),
+      button(d, 1331, {36, 744, 215, 60}, "Zoom out");
+      button(d, 1332, {267, 744, 215, 60}, "Zoom in");
+      button(d, 1333, {498, 744, 250, 60}, "Fit image");
+      button(d,1054,{770,744,634,60},auto_format_?"Auto-detection: On":"Auto-detection: Off",auto_format_);
+      button(d,1053,{1034,814,370,52},"Detect once");
+      const char* detection=(!auto_format_ || format_manual_)?"Manual video format":detected_layout_.ambiguous?"Projection not recognised; select the format manually.":detected_layout_.evidence==3?"Automatic format: decoded stereo views":detected_layout_.evidence==2?"Automatic format: video metadata":detected_layout_.evidence==1?"Automatic format: filename hints":"Automatic format: standard 2D";
+      d.text(36,827,18,tr(detection),accent);
+      d.text(36, 878, 20, tr("Left stick: seek 10 s / Right stick: zoom"),
              muted);
       if (immersive)
         d.text(36, 905, 17,
@@ -379,7 +380,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       slider(1341, 398, "Contrast", image.contrast, .5f, 1.5f);
       slider(1342, 466, "Saturation", image.saturation, 0, 2);
       slider(1343, 534, "Gamma", image.gamma, .5f, 2);
-      slider(1344, 602, "Zoom", image.zoom, 1, 4);
+      slider(1344, 602, "Zoom", image.zoom, minimum_zoom(), 4);
       slider(1345, 670, "Horizontal position", image.pan_x, -1, 1);
       slider(1346, 738, "Vertical position", image.pan_y, -1, 1);
       button(d, 1330, {36, 830, 340, 60}, "Reset image");
