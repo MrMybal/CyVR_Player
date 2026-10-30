@@ -84,12 +84,21 @@ bool save_application_state(const std::string &path,
     }
     c.put(image.quality);
     c.put(image.upscale);
-    c.put(std::clamp(s.display_tab, 0, 2));
+    c.put(std::clamp(s.display_tab, 0, 3));
     c.put(std::uint64_t(0x54524b31));
     for(int stream:{s.tracks.video,s.tracks.audio,s.tracks.subtitle})c.put(std::uint64_t(std::clamp(stream,-2,255)+2));
     c.put(s.tracks.external_subtitle);
     c.put(std::uint64_t(0x55494d31));c.put(s.tracks_open?1:0);c.put(std::clamp(s.track_tab,0,3));c.put(std::clamp(s.track_offset,0,10000));
     c.put(std::uint64_t(0x4b455931));c.put(s.tracks.clearkey_file);
+    c.put(std::uint64_t(0x43494e31));
+    auto cinema=s.cinema;cinema.sanitize();c.put(cinema.environment);
+    for(float value:{cinema.ambient,cinema.panel_opacity,cinema.width,cinema.distance,cinema.curvature,cinema.elevation,cinema.pitch,cinema.roll}){
+      std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);
+    }
+    c.put(std::clamp(s.cinema_tab,0,2));
+    c.put(std::uint64_t(0x414d4231));auto ambilight=s.ambilight;ambilight.sanitize();
+    c.put((ambilight.enabled?1:0)|(ambilight.auto_bars?2:0));
+    for(float value:{ambilight.intensity,ambilight.spread,ambilight.smoothing,ambilight.saturation,ambilight.inset}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -172,13 +181,25 @@ load_application_state(const std::string &path) noexcept {
       const auto savedScale=c.get();s.image.upscale=imageTag==0x494d4731?0:int(std::min<std::uint64_t>(3,savedScale));
       s.image.sanitize();
       if (c.cursor < c.bytes.size())
-        s.display_tab = int(std::min<std::uint64_t>(2, c.get()));
+        s.display_tab = int(std::min<std::uint64_t>(3, c.get()));
       if(c.cursor<c.bytes.size()){
         if(c.get()!=0x54524b31)return {};
         for(int* stream:{&s.tracks.video,&s.tracks.audio,&s.tracks.subtitle}){const auto value=c.get();if(value>257)return {};*stream=int(value)-2;}
         s.tracks.external_subtitle=c.string();
         if(c.cursor<c.bytes.size()){if(c.get()!=0x55494d31)return {};s.tracks_open=c.get()!=0;s.track_tab=int(std::min<std::uint64_t>(3,c.get()));s.track_offset=int(std::min<std::uint64_t>(10000,c.get()));}
         if(c.cursor<c.bytes.size()){if(c.get()!=0x4b455931)return {};s.tracks.clearkey_file=c.string();}
+        if(c.cursor<c.bytes.size()){
+          if(c.get()!=0x43494e31)return {};s.cinema.environment=int(std::min<std::uint64_t>(7,c.get()));
+          for(float* value:{&s.cinema.ambient,&s.cinema.panel_opacity,&s.cinema.width,&s.cinema.distance,&s.cinema.curvature,&s.cinema.elevation,&s.cinema.pitch,&s.cinema.roll}){
+            const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);
+          }
+          s.cinema.sanitize();s.cinema_tab=int(std::min<std::uint64_t>(2,c.get()));
+          if(c.cursor<c.bytes.size()){
+            if(c.get()!=0x414d4231)return {};const auto flags=c.get();s.ambilight.enabled=flags&1;s.ambilight.auto_bars=flags&2;
+            for(float* value:{&s.ambilight.intensity,&s.ambilight.spread,&s.ambilight.smoothing,&s.ambilight.saturation,&s.ambilight.inset}){const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);}
+            s.ambilight.sanitize();
+          }
+        }
       }
     }
     if (c.cursor != c.bytes.size() || s.url.size() > 2048)

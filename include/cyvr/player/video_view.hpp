@@ -4,12 +4,13 @@
 #include "cyvr/player/video_color.hpp"
 namespace cyvr::player {
 struct VideoView {
-  // 0 packed source, 1 single eye in a 2D panel, 2 cinema, 3 VR180, 4 VR360.
+  // 0 packed source, 1 single eye, 2 flat cinema, 3 VR180, 4 VR360, 5 curved cinema, 6 averaged stereo capture.
   int kind{}, eye{};
   float fov[4]{-1, 1, 1, -1}; // tangent left/right/up/down
   cyvr::Quat orientation{};   // eye ray -> video-local coordinates
   cyvr::Vec3 origin{};        // eye position relative to the cinema screen
   float screen_width{4}, screen_height{2.25f};
+  float screen_radius{};
 };
 // Exact shared layout consumed by video.frag on Android and in the GPU probe.
 struct alignas(16) VideoPush {
@@ -50,6 +51,7 @@ inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
   p.screen[0] = mapping.screen_width;
   p.screen[1] = mapping.screen_height;
   p.screen[2] = color.peak_nits;
+  p.screen[3] = mapping.screen_radius;
   return p;
 }
 inline cyvr::Quat inverse_rotation(cyvr::Quat q) {

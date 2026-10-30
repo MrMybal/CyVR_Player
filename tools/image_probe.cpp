@@ -75,6 +75,7 @@ void readable(VulkanContext &gpu, VkImage image) {
   vkCheck(vkDeviceWaitIdle(gpu.device), "probe wait");
   vkDestroyCommandPool(gpu.device, pool, nullptr);
 }
+#include "ambilight_probe.hpp"
 int main(int argc, char **argv) {
   try {
     if (argc != 2 && argc != 3)
@@ -89,7 +90,7 @@ int main(int argc, char **argv) {
     };
     VulkanRenderer renderer(gpu);
     renderer.initialize(VK_FORMAT_R8G8B8A8_SRGB, assets);
-    int checks = 0;
+    int checks = check_ambilight(gpu,renderer,assets);
     for (int stereo = 0; stereo < 3; ++stereo)
       for (int quality = 0; quality < 4; ++quality) {
         ImageSettings settings;
@@ -480,6 +481,67 @@ int main(int argc, char **argv) {
         ++checks;
       }
       encoded.destroyTarget(source);
+    }
+    // Aim rays at analytically known points on a cylinder, independently of the
+    // shader's quadratic intersection. Check UV registration, parallax, packing,
+    // source eye boundaries and transparent coverage through every filter.
+    for(int packing=0;packing<3;++packing){
+      VulkanRenderer encoded(gpu);encoded.initialize(VK_FORMAT_R8G8B8A8_UNORM,assets);
+      auto source=encoded.createTarget(packing==1?256:128,packing==2?256:128);
+      constexpr unsigned colors[2][4]{{0xff0000,0x00ff00,0x0000ff,0xffff00},{0x00ffff,0xff00ff,0xffffff,0x404040}};
+      DrawList pattern;
+      for(int eye=0;eye<(packing?2:1);++eye)for(int cell=0;cell<4;++cell){
+        const auto rgb=colors[eye][cell];pattern.rect({float((packing==1?eye*128:0)+(cell%2)*64),float((packing==2?eye*128:0)+(cell/2)*64),64,64},{float((rgb>>16)&255)/255,float((rgb>>8)&255)/255,float(rgb&255)/255,1});
+      }
+      encoded.draw(source,pattern);readable(gpu,source.image);
+      for(float degrees:{0.f,.1f,30.f,90.f,120.f})for(int quality=0;quality<4;++quality){
+        ImageSettings settings;settings.quality=quality;
+        const VideoExtent output{64,64},input=quality>=2?VideoExtent{32,32}:output;
+        auto target=renderer.createTarget(output.width,output.height);
+        auto processor=quality?std::make_unique<ImageProcessor>(gpu,VK_FORMAT_R8G8B8A8_SRGB,assets,input,output,quality):nullptr;
+        {
+          ProjectionProbe projection(gpu,assets,source.view);
+          for(int eye=0;eye<(packing?2:1);++eye)for(int cell=0;cell<5;++cell){
+            const float u=cell==4?1.2f:(cell%2?.75f:.25f),v=cell/2?.75f:.25f;
+            const float angle=degrees*pi/180,radius=degrees?4/angle:0;
+            const Vec3 point{degrees?radius*std::sin((u-.5f)*angle):4*(u-.5f),2.25f*(.5f-v),degrees?radius*(1-std::cos((u-.5f)*angle)):0};
+            VideoView view;view.kind=5;view.eye=eye;view.screen_width=4;view.screen_height=2.25f;view.screen_radius=radius;view.origin={eye?.032f:-.032f,.1f,3.5f};
+            const auto ray=point-view.origin;const auto x=ray.x/-ray.z,y=ray.y/-ray.z;
+            view.fov[0]=x-.005f;view.fov[1]=x+.005f;view.fov[2]=y+.005f;view.fov[3]=y-.005f;
+            auto push=video_push({0,0,1,1},ImageSettings{},packing,view);
+            if(processor)projection.run(processor->source_image(),input,push,true,[&](VkCommandBuffer cmd){processor->record(cmd,target.image,settings,0,false);});
+            else projection.run(target.image,output,push);
+            const auto pixels=renderer.readback(target);const auto at=(32*64+32)*4;
+            if(cell==4){if(pixels[at+3]>2)throw std::runtime_error("Curved screen leaked beyond its arc");}
+            else{
+              for(int channel=0;channel<3;++channel){
+                const auto byte=(colors[eye][cell]>>(16-channel*8))&255;const double e=byte/255.;
+                const auto linear=e<.081?e/4.5:std::pow((e+.099)/1.099,1/.45);
+                const auto expected=std::lround(255*(linear<=.0031308?12.92*linear:1.055*std::pow(linear,1/2.4)-.055));
+                if(std::abs(int(pixels[at+channel])-expected)>3 || pixels[at+3]<250)throw std::runtime_error("Curved screen UV/eye mismatch: degrees="+std::to_string(degrees)+" filter="+std::to_string(quality)+" packing="+std::to_string(packing)+" cell="+std::to_string(cell));
+              }
+            }
+            ++checks;
+          }
+        }
+        processor.reset();renderer.destroyTarget(target);
+      }
+      encoded.destroyTarget(source);
+    }
+    // Environment dimming must reach full black without changing video controls.
+    {
+      auto target=renderer.createTarget(64,64);DrawList empty;Settings settings;
+      for(auto background:{Background::Black,Background::Dark,Background::Studio,Background::Night}){
+        settings.background=background;settings.environmentDim=0;
+        auto env=environmentView({{0,1.6f,0},{}},-.7f,.7f,.7f,-.7f,settings);
+        renderer.draw(target,empty,&env);const auto pixels=renderer.readback(target);
+        for(std::size_t i=0;i<pixels.size();i+=4)if(pixels[i]||pixels[i+1]||pixels[i+2])throw std::runtime_error("Environment dimmer did not reach black");
+        ++checks;
+      }
+      settings.background=Background::Black;settings.environmentDim=1;
+      auto env=environmentView({{0,1.6f,0},{}},-.7f,.7f,.7f,-.7f,settings);renderer.draw(target,empty,&env);
+      const auto pixels=renderer.readback(target);for(std::size_t i=0;i<pixels.size();i+=4)if(pixels[i]||pixels[i+1]||pixels[i+2])throw std::runtime_error("Black cinema emitted background light");
+      ++checks;renderer.destroyTarget(target);
     }
     // PQ/HLG reference gray steps through the actual video shader and all filters.
     for(int transfer:{6,7}){

@@ -64,3 +64,11 @@ The local foundation forwards `XrEventDataReferenceSpaceChangePending` through t
 The foundation routes a captured pointer with `isDockWidget()`: only IDs 600–699, excluding the main-panel drag handle 605, belong to the dock. Player IDs above 1000 remain on the main panel throughout trigger press/hold/release. Treating every ID above 600 as a dock control previously lost immersive clicks, including **Full interface**. The supplied MIT foundation and the local sibling include this bounded classifier; application regression tests exercise both controller pointers through compact/full transitions using real panel ray intersections.
 
 `DrawList::overlay()` and `VulkanRenderer::setOverlayTexture()` add a borrowed RGBA overlay independent of the browser atlas and video texture. Subtitles use this binding in 2D and a separate video-anchored OpenXR layer in immersion. The reusable UI code remains MIT and contains no FFmpeg/libass/player dependency.
+
+## 0.4.7 cinema and Ambilight
+
+The compact Cinema action opens Display's cinema page. Screen, Environment and Ambilight subtabs share both hosts; rendering effects apply in immersion. CIN1 stores screen/environment settings, AMB1 adds optional Ambilight controls. Missing extensions receive neutral defaults without replacing existing geometry. Cinema geometry is independent of the movable controls panel.
+
+The generic foundation adds optional XR-extension negotiation, Black/Dark backgrounds and an environment-only brightness value. Cylinder support is queried at runtime; it is not required to start the 2D host. Environment photos are 4K CC0 with packaged credits. The supplied foundation remains MIT; unrelated changes in a newer working checkout are not required by this release.
+
+Ambilight uses one optional alpha layer behind the film and captions, following the same centre, size and orientation. Both stereo eyes see the same averaged colour field. Its controls remain editable when off; disabling removes the layer immediately. Errors report a message and leave movie playback running; toggle the option to retry.

@@ -299,6 +299,15 @@ void PlayerApplication::tick() {
     ui_.invalidate();
   }
   const bool immersive_video=ui_.presentation==cyvr::Presentation::Immersive && state_.ready;
+  if(ui_.presentation==cyvr::Presentation::Immersive){
+    constexpr cyvr::Background environments[]{cyvr::Background::Black,cyvr::Background::Dark,cyvr::Background::Studio,cyvr::Background::Night,cyvr::Background::Passthrough,cyvr::Background::Lounge,cyvr::Background::Observatory,cyvr::Background::Terrace};
+    cinema.sanitize();
+    if(cinema.environment==4 && !ui_.passthroughAvailable){cinema.environment=1;state_dirty_=true;ui_.setToast(std::string(tr("Passthrough is unavailable; using a dark background.")));}
+    const auto background=environments[cinema.environment];
+    if(ui_.settings.background!=background || ui_.settings.environmentDim!=cinema.ambient || ui_.settings.opacity!=cinema.panel_opacity){
+      ui_.settings.background=background;ui_.settings.environmentDim=cinema.ambient;ui_.settings.opacity=cinema.panel_opacity;ui_.invalidate();
+    }
+  }
   controls_.update(immersive_video,activity_now,ui_.interacting() || scrubbing_ || ui_.modalOpen);
   if(tracks_open_ && state_.ready && !was_ready)controls_.expand(activity_now);
   const bool compact=immersive_video && controls_.mode()!=PlaybackControls::Mode::full;
@@ -420,8 +429,19 @@ bool PlayerApplication::action(int id) {
     half_stereo = !half_stereo;
   else if (id == 1052)
     swap_eyes = !swap_eyes;
-  else if (id >= 1300 && id <= 1302)
+  else if (id >= 1300 && id <= 1303)
     display_tab_ = id - 1300;
+  else if(id>=1610 && id<=1617)cinema.environment=id-1610;
+  else if(id==1620)cinema.curvature=0;
+  else if(id==1621)cinema.curvature=60;
+  else if(id==1622){cinema.width=8;cinema.distance=5;cinema.curvature=70;cinema.elevation=cinema.pitch=cinema.roll=0;}
+  else if(id==1623)cinema.reset_screen();
+  else if(id>=1660 && id<=1661)cinema_tab_=id-1660;
+  else if(id==1663)cinema_tab_=2;
+  else if(id==1670)ambilight.enabled=!ambilight.enabled;
+  else if(id==1671)ambilight.auto_bars=!ambilight.auto_bars;
+  else if(id==1672)ambilight={};
+  else if(id==1662){controls_.expand(controls_now());ui_.compactInterface=false;page_=3;ui_.page=cyvr::Page(3);display_tab_=3;}
   else if (id >= 1310 && id <= 1313) {
     image.quality = id - 1310;
     ++processing_request;
@@ -496,6 +516,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.half_stereo = half_stereo;
   s.swap_eyes = swap_eyes;
   s.image = image;
+  s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
   s.display_tab = display_tab_;
@@ -532,6 +553,7 @@ bool PlayerApplication::restore(bool resume_media) {
   half_stereo = s.half_stereo;
   swap_eyes = s.swap_eyes;
   image = s.image;
+  cinema=s.cinema;cinema.sanitize();ambilight=s.ambilight;ambilight.sanitize();cinema_tab_=std::clamp(s.cinema_tab,0,2);
   display_tab_ = s.display_tab;
   tracks_open_=s.tracks_open;track_tab_=s.track_tab;track_offset_=s.track_offset;
   shift_ = s.shift;
@@ -585,6 +607,26 @@ void PlayerApplication::cancel_scrub() {
 }
 bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
   control_activity();
+  if(id>=1640 && id<=1652){
+    if(phase==cyvr::SliderPhase::Cancel || !std::isfinite(fraction))return true;
+    const auto f=std::clamp(fraction,0.f,1.f);
+    switch(id){
+      case 1640:cinema.width=1+11*f;break;
+      case 1641:cinema.distance=1+11*f;break;
+      case 1642:cinema.curvature=120*f;break;
+      case 1643:cinema.elevation=-3+6*f;break;
+      case 1644:cinema.pitch=-90+180*f;break;
+      case 1645:cinema.roll=-180+360*f;break;
+      case 1646:cinema.ambient=f;break;
+      case 1647:cinema.panel_opacity=.25f+.75f*f;break;
+      case 1648:ambilight.intensity=2*f;break;
+      case 1649:ambilight.spread=.05f+.55f*f;break;
+      case 1650:ambilight.smoothing=1.5f*f;break;
+      case 1651:ambilight.saturation=2*f;break;
+      case 1652:ambilight.inset=.2f*f;break;
+    }
+    cinema.sanitize();ambilight.sanitize();state_dirty_=true;ui_.invalidate();return true;
+  }
   if (id >= 1340 && id <= 1347) {
     if (phase == cyvr::SliderPhase::Cancel || !std::isfinite(fraction))
       return true;

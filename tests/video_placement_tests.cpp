@@ -37,6 +37,18 @@ int main() {
         "Initial cinema placement must retain the existing viewing distance");
     require(same(original.orientation, head.orientation),
             "Initial video orientation must face the viewer");
+    CinemaSettings cinema;cinema.width=7;cinema.distance=6;cinema.elevation=.75f;cinema.curvature=90;cinema.pitch=25;cinema.roll=-12;
+    const auto customized=video.screen(image,cinema);
+    require(same(customized.position,{0,2.35f,-6}),"Screen distance and height must be independent of the controls");
+    const auto center=cylinder_center(customized,cinema.radius());
+    const auto middle=center.position+rotate(center.orientation,{0,0,-cinema.radius()});
+    require(same(middle,customized.position),"Cylinder center must retain the flat screen's midpoint after tilt/roll");
+    require(near(cinema.radius()*cinema.angle(),cinema.width),"Curving the screen must preserve its arc width and texture aspect");
+    video.place(head,2);
+    require(same(video.screen(image,cinema),customized),"UI distance must not change explicit movie distance");
+    video.place(head,1.35f);
+    cinema.environment=7;cinema.ambient=.12f;cinema.panel_opacity=.6f;cinema.reset_screen();
+    require(cinema.width==4 && cinema.curvature==0 && cinema.environment==7 && cinema.ambient==.12f && cinema.panel_opacity==.6f,"Reset screen must preserve environment settings");
     for (int i = 0; i < 120; ++i) {
       // Realistic UI drag, release-facing rotation, resize/follow and
       // hide/wake.

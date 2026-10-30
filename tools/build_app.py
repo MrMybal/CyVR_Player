@@ -73,6 +73,9 @@ def notices(destination):
     for name,source in [('dav1d-BSD-2-Clause.txt',ROOT/'.deps/dav1d/source/COPYING'),
                         ('edge264-mvc-BSD-3-Clause.txt',ROOT/'.deps/edge264/source/LICENSE_BSD.txt')]:
         shutil.copyfile(source,destination/name)
+    for name,source in [('CyVR_UI-environments-CC0.txt',UI/'third_party/notices/CC0-1.0.txt'),
+                        ('CyVR_UI-environment-credits.md',UI/'assets/scenes/README.md')]:
+        if source.is_file():shutil.copyfile(source,destination/name)
     for folder in [ROOT/'third_party',ROOT/'.deps/ffmpeg/android-arm64/licenses',ROOT/'.deps/ffmpeg/windows/licenses',UI/'third_party',UI/'assets/fonts']:
         if folder.exists():
             for file in folder.rglob('*'):

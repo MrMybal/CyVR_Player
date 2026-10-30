@@ -1,5 +1,7 @@
 #pragma once
 #include "cyvr/player/image_settings.hpp"
+#include "cyvr/player/cinema_settings.hpp"
+#include "cyvr/player/ambilight.hpp"
 #include "cyvr/player/track_selection.hpp"
 #include <cstdint>
 #include <optional>
@@ -13,6 +15,9 @@ struct ApplicationState {
   int page{}, offset{}, stereo{}, projection{}, display_tab{};
   bool half_stereo{}, swap_eyes{}, shift{}, symbols{}, playing{};
   ImageSettings image;
+  CinemaSettings cinema;
+  AmbilightSettings ambilight;
+  int cinema_tab{};
   TrackSelection tracks;
   bool tracks_open{};int track_tab{},track_offset{};
 };

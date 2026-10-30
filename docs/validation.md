@@ -1,4 +1,17 @@
-# Current validation — 0.4.6 (30 October 2026)
+# Current validation — 0.4.7 (30 October 2026)
+
+- Windows: all nine CTest suites pass. The GPU suite now performs **693 checks**, including 500 independently constructed curved-surface rays, stereo/eye and quality combinations, black environment dimming and 14 Ambilight cases. Actual shaders check edge colour direction, transparency over the movie and black frames, zero intensity, saturation, letterbox handling, temporal convergence/reset and linear-light stereo averaging.
+- State/UI: new CIN1 and AMB1 extensions preserve screen, environment and Ambilight values. Both legacy base checkpoints and the installed pre-Ambilight cinema checkpoint migrate without losing the source or geometry. Pointer controls, compact Cinema shortcut, setting bounds and reset are covered. Vulkan renders of all three settings pages in English/French were inspected for legibility.
+- Android: default immersive and strictly 2D Alpha variants compile and pass ARM64, 16 KiB ELF/ZIP, host/manifest, non-debuggable and notice checks. The immersive APK includes both CC0 environment photos at 4096 × 2048 with attribution/license text. The strictly 2D variant excludes OpenXR.
+- Quest 3: the same **693** image checks pass on Adreno, including the new floating-point Ambilight renderer. One final diagnostic glow pass measured approximately **0.093 ms GPU**; this is an isolated tiny-target sample, excluding hardware-video capture, compositor, UI and decoding, and is not a sustained app-performance figure.
+- The APK is installed with the existing signing identity and preserved app data. Android panel launch reaches a 1600 × 1100 Vulkan surface. During the user's manual cinema trial, runtime logs report native cylinder support and native curved presentation of a 3840 × 2160 HEVC/PQ source, along with changes to screen distance/tilt/curvature and environments. The user confirmed the new backgrounds and curvature work. Existing audio and Full interface fixes were also confirmed by the user before this update.
+- A scripted immersive-menu run was interrupted by concurrent user activity before issuing its cinema actions; it does not count as coverage of all filter/background combinations. No private playback checkpoint was exported for these checks. User cinema preferences were retained when installing Ambilight.
+
+Remaining: worn-headset Ambilight appearance/comfort, all filter/background/caption combinations, physical interaction and reference-space changes, passthrough availability on other runtime configurations, and sustained high-resolution/thermal measurements. Ambilight currently surrounds the cinema screen rather than lighting room geometry; it does not apply to panoramic or volumetric sources. Headless pixel tests do not establish binocular comfort or compositor FPS.
+
+## Previous validation records
+
+# 0.4.6 validation (30 October 2026)
 
 - Windows: nine CTest suites pass. New cases cover timestamp-matched stereo pairs, explicit eye metadata, 8/10-bit samples, seek isolation and malformed/duplicate JWK rejection. Existing 174 GPU processing cases, state migration, placement and controls remain covered.
 - Integration: original AV1 8/10-bit clips decode all 48 frames; four pinned synthetic MVC structural vectors cover both views, inverted NAL order, inter-view prediction and display ordering. A generated two-PID MPEG-TS fixture retains both distinct eyes. CENC AES-128 with a generated test JWK reproduces the clear video's exact decoded luma hash; missing/wrong keys do not. Multi-track MKV/ASS/PGS tests and all sixteen existing desktop file/stream cases pass.

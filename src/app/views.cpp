@@ -127,10 +127,11 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
     ui_.applicationWidget(1025,track,cyvr::Control::Slider,seek);
     d.text(252,850,20,clockText(position),white);
     d.text(1065,850,20,state_.duration_us>0?clockText(state_.duration_us):"--:--:--",muted);
-    button(d,1362,{252,890,155,44},"Previous",false,adjacent_video(-1,false));
-    button(d,1020,{421,890,180,44},state_.playing?"Pause":"Resume",false,state_.ready && !state_.ended);
-    button(d,1363,{615,890,155,44},"Next",false,adjacent_video(1,false));
-    button(d,1360,{910,890,278,44},"Full interface");
+    button(d,1362,{252,890,118,44},"Previous",false,adjacent_video(-1,false));
+    button(d,1020,{384,890,144,44},state_.playing?"Pause":"Resume",false,state_.ready && !state_.ended);
+    button(d,1363,{542,890,118,44},"Next",false,adjacent_video(1,false));
+    button(d,1662,{674,890,180,44},"Cinema");
+    button(d,1360,{868,890,320,44},"Full interface");
     return true;
   }
   d.rect({0, 0, 1440, 990},
@@ -323,16 +324,16 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
     button(d, 1255, {842, 746, 140, 64}, "Aa", shift_, !symbols_);
     button(d, 1254, {36, 838, 1368, 66}, "Open", true, !url_.empty());
   } else {
-    const char *tabs[]{"Video format", "Image corrections", "Image quality"};
+    const char *tabs[]{"Video format", "Image corrections", "Image quality", "Immersive cinema"};
     d.text(36, 182, 34, tr(tabs[display_tab_]), white);
-    for (int i = 0; i < 3; ++i)
-      button(d, 1300 + i, {36.f + i * 458, 246, 444, 58}, tabs[i],
+    for (int i = 0; i < 4; ++i)
+      button(d, 1300 + i, {36.f + i * 343, 246, 330, 58}, tabs[i],
              display_tab_ == i);
     auto slider = [&](int id, float y, std::string_view label, float value,
                       float lo, float hi) {
       d.text(36, y + 8, 22, tr(label), white);
-      d.text(320, y + 8, 22,
-             cyvr::formatNumber(ui_.settings.language, value, 2), accent);
+      d.text(365, y + 8, 22,
+             (id==1646 || id==1647 || id==1648 || id==1649 || id==1652)?cyvr::formatNumber(ui_.settings.language,value*100,0)+" %":cyvr::formatNumber(ui_.settings.language, value, 2), accent);
       const float f = std::clamp((value - lo) / (hi - lo), 0.f, 1.f);
       const cyvr::Rect r{470, y, 934, 48};
       d.rect({r.x, y + 20, r.w, 8}, surface, 4);
@@ -380,7 +381,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       button(d, 1330, {36, 830, 340, 60}, "Reset image");
       d.text(406, 849, 20, tr("Grip + trigger, move hand up/down: zoom"),
              muted);
-    } else {
+    } else if(display_tab_==2) {
       for (int i = 0; i < 4; ++i)
         button(d, 1310 + i, {36.f + i * 343, 350, 328, 68},
                i == 0   ? "Native"
@@ -409,6 +410,42 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                      : std::string_view(processing_status),
                  1360, 19),
              muted);
+    } else {
+      button(d,1660,{36,320,444,52},"Screen geometry",cinema_tab_==0);
+      button(d,1661,{498,320,444,52},"Environment",cinema_tab_==1);
+      button(d,1663,{960,320,444,52},"Ambilight",cinema_tab_==2);
+      if(cinema_tab_==0){
+        slider(1640,390,"Screen width (m)",cinema.width,1,12);
+        slider(1641,452,"Viewing distance (m)",cinema.distance,1,12);
+        slider(1642,514,"Screen curvature (degrees)",cinema.curvature,0,120);
+        slider(1643,576,"Screen height offset (m)",cinema.elevation,-3,3);
+        slider(1644,638,"Screen tilt (degrees)",cinema.pitch,-90,90);
+        slider(1645,700,"Screen roll (degrees)",cinema.roll,-180,180);
+        const char* presets[]{"Flat screen","Curved screen","Large cinema","Reset screen"};
+        for(int i=0;i<4;++i)button(d,1620+i,{36.f+i*343,776,330,56},presets[i]);
+        d.text(36,855,20,tr("Geometry applies to cinema video; VR180/360 keep their projection."),muted);
+        d.text(36,887,20,tr("Zoom and image position remain available under Image corrections."),muted);
+      }else if(cinema_tab_==1){
+        const char* names[]{"Black cinema","Dark background","Sunlit lounge","Venice sunset","Passthrough","Modern lounge","Observatory","Sunset terrace"};
+        for(int i=0;i<8;++i)button(d,1610+i,{36.f+(i%4)*343,406.f+(i/4)*78,330,64},names[i],cinema.environment==i,true);
+        slider(1646,598,"Environment brightness",cinema.ambient,0,1);
+        slider(1647,674,"Interface opacity",cinema.panel_opacity,.25f,1);
+        d.text(36,777,21,tr("Background lighting never changes the movie brightness."),muted);
+        d.text(36,817,20,tr("Black cinema reduces distractions and environment rendering work."),muted);
+        d.text(36,857,20,tr("Passthrough brightness is managed by the headset."),muted);
+      }
+      if(cinema_tab_==2){
+        button(d,1670,{36,398,676,58},"Enable Ambilight",ambilight.enabled);
+        button(d,1671,{728,398,676,58},"Ignore black bars",ambilight.auto_bars);
+        slider(1648,484,"Glow intensity",ambilight.intensity,0,2);
+        slider(1649,552,"Glow spread",ambilight.spread,.05f,.6f);
+        slider(1650,620,"Smoothing (seconds)",ambilight.smoothing,0,1.5f);
+        slider(1651,688,"Glow saturation",ambilight.saturation,0,2);
+        slider(1652,756,"Edge sample inset",ambilight.inset,0,.2f);
+        button(d,1672,{36,828,330,52},"Reset Ambilight");
+        d.text(390,849,19,tr("A soft video-coloured glow follows the flat or curved cinema screen."),muted);
+      }
+      if(!immersive)d.text(36,907,18,tr("These settings take effect when you enter immersive mode."),accent);
     }
   }
   d.line({32, 929}, {1408, 929}, Color::hex(light ? 0xb0c3c9 : 0x354851));

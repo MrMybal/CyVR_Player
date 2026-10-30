@@ -42,14 +42,34 @@ void main(){
     else {
         eye=vec2(crop.format.x==1?crop.format.z:0,crop.format.x==2?crop.format.z:0);
         local=uv;
-        if(kind>=2){
+        if(kind>=2 && kind!=6){
             vec3 ray=rotateRay(crop.rotation,normalize(vec3(mix(crop.fov.x,crop.fov.y,uv.x),mix(crop.fov.z,crop.fov.w,uv.y),-1)));
-            if(kind==2){
-                if(ray.z>=-.00001){color=vec4(0);return;}
-                float t=-crop.origin.z/ray.z;
-                vec3 p=crop.origin.xyz+ray*t;
-                local=vec2(p.x/crop.screen.x+.5,.5-p.y/crop.screen.y);
-                if(t<=0){color=vec4(0);return;}
+            if(kind==2||kind==5){
+                vec3 p;
+                if(kind==5 && crop.screen.w>0.){
+                    float r=crop.screen.w;
+                    float a=dot(ray.xz,ray.xz)/r;
+                    float b=2.*(dot(crop.origin.xz,ray.xz)/r-ray.z);
+                    float c=dot(crop.origin.xz,crop.origin.xz)/r-2.*crop.origin.z;
+                    float discriminant=b*b-4.*a*c;
+                    if(a<1e-10 || discriminant<0.){color=vec4(0);return;}
+                    float q=-.5*(b+(b>=0.?1.:-1.)*sqrt(discriminant));
+                    float t0=q/a,t1=abs(q)>1e-10?c/q:t0;
+                    float nearT=min(t0,t1),farT=max(t0,t1);
+                    float t=nearT>0.?nearT:farT;
+                    p=crop.origin.xyz+ray*t;
+                    if(t<=0. || dot(ray.xz,vec2(-p.x,r-p.z))>=0.){
+                        t=farT;p=crop.origin.xyz+ray*t;
+                        if(t<=0. || dot(ray.xz,vec2(-p.x,r-p.z))>=0.){color=vec4(0);return;}
+                    }
+                    local=vec2(atan(p.x,r-p.z)*r/crop.screen.x+.5,.5-p.y/crop.screen.y);
+                }else{
+                    if(ray.z>=-.00001){color=vec4(0);return;}
+                    float t=-crop.origin.z/ray.z;
+                    p=crop.origin.xyz+ray*t;
+                    local=vec2(p.x/crop.screen.x+.5,.5-p.y/crop.screen.y);
+                    if(t<=0){color=vec4(0);return;}
+                }
                 if(any(lessThan(local,vec2(0)))||any(greaterThan(local,vec2(1))))coverage=0.;
             } else {
                 float longitude=atan(ray.x,-ray.z);
@@ -64,6 +84,10 @@ void main(){
     local=clamp(local,halfPixel,1.-halfPixel);
     vec3 encoded=max(texture(video,crop.uvRect.xy+(eye+local)/eyes*crop.uvRect.zw).rgb,vec3(0));
     vec3 linear=videoLinear(encoded);
+    if(kind==6 && crop.format.x!=0){
+      vec2 other=vec2(crop.format.x==1?1:0,crop.format.x==2?1:0);
+      linear=.5*(linear+videoLinear(max(texture(video,crop.uvRect.xy+(other+local)/eyes*crop.uvRect.zw).rgb,vec3(0))));
+    }
     // Keep edge RGB beneath transparent coverage. Spatial reconstruction taps
     // must not treat the cinema/VR180 boundary as a black part of the video.
     color=vec4(correctImage(linear,crop.controls),coverage);

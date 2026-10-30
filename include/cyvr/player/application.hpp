@@ -102,6 +102,8 @@ public:
   std::string processing_status;
   std::uint64_t processing_request{};
   std::uint64_t video_placement_request{};
+  CinemaSettings cinema;
+  AmbilightSettings ambilight;
   RenderMonitor render_monitor;
   PlayerSession &session() { return session_; }
   int stereo{};     // mono, SBS, top/bottom
@@ -132,6 +134,7 @@ private:
   PlayerState state_;
   int page_{}, offset_{};
   int display_tab_{};
+  int cinema_tab_{};
   bool zoom_gesture_[2]{}, stick_latched_[2]{};
   PlaybackControls controls_;
   std::vector<BrowserItem> playlist_;

@@ -9,6 +9,18 @@ import struct
 import zipfile
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
+def jpeg_dimensions(data):
+    assert data[:2]==bytes((255,216))
+    pos=2
+    while pos+4<=len(data):
+        assert data[pos]==255
+        marker=data[pos+1];pos+=2
+        if marker==255:pos-=1;continue
+        size=int.from_bytes(data[pos:pos+2],'big');assert size>=2
+        if marker in (192,193,194):
+            height,width=struct.unpack_from('>HH',data,pos+3);return width,height
+        pos+=size
+    raise AssertionError('JPEG frame dimensions missing')
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--panel-only',action='store_true');parser.add_argument('--alpha',action='store_true');args=parser.parse_args()
     version=ET.parse(ROOT/'android/AndroidManifest.xml').getroot().get('{http://schemas.android.com/apk/res/android}versionName')
@@ -31,6 +43,10 @@ def main():
     libraries=[]
     with zipfile.ZipFile(apk) as archive,apk.open('rb') as raw:
         names=set(archive.namelist())
+        if not args.panel_only:
+            for photo in ('lebombo','venice_sunset'):
+                assert jpeg_dimensions(archive.read('assets/scenes/'+photo+'.jpg'))==(4096,2048), 'Cinema backgrounds must retain their bundled 4K resolution'
+            assert 'assets/licenses/CyVR_UI-environments-CC0.txt' in names and 'assets/licenses/CyVR_UI-environment-credits.md' in names
         assert ('lib/arm64-v8a/libopenxr_loader.so' in names)==(not args.panel_only)
         if args.panel_only:
             native=archive.read('lib/arm64-v8a/libcyvr_player.so')

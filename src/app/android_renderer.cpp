@@ -4,6 +4,7 @@
 #include "cyvr/player/media.hpp"
 #include "cyvr/player/video_placement.hpp"
 #include "cyvr/player/subtitle_rasterizer.hpp"
+#include "cyvr/player/ambilight.hpp"
 #include "cyvr/player/splat_renderer.hpp"
 #include <android/log.h>
 #include <cstring>
@@ -50,6 +51,9 @@ class Renderer final : public Base {
   bool initialized_{};
   android::ImageLease retained_;
   ImageSettings rendered_image_;
+  CinemaSettings rendered_cinema_,last_cinema_;
+  CinemaSettings reported_cinema_;
+  int reported_surface_{-1};
   int rendered_stereo_{-1}, resource_quality_{-1}, rendered_projection_{-1};
   bool rendered_swap_{};
   float last_zoom_{1};
@@ -96,9 +100,28 @@ class Renderer final : public Base {
   std::vector<VkImage> images_;
   std::array<XrCompositionLayerQuad, 2> quads_{};
   std::array<XrCompositionLayerEquirect2KHR, 2> spheres_{};
+  std::array<XrCompositionLayerCylinderKHR,2> cylinders_{};
+  bool cylinder_enabled_{};
+  std::unique_ptr<AmbilightRenderer> ambilight_;
+  std::unique_ptr<VideoRenderer> ambilight_capture_;
+  XrSwapchain ambilight_swapchain_{};
+  std::vector<VkImage> ambilight_images_;
+  XrCompositionLayerQuad ambilight_quad_{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  XrCompositionLayerCylinderKHR ambilight_cylinder_{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+  AmbilightSettings ambilight_settings_;
+  ImageSettings ambilight_image_;
+  std::uint64_t ambilight_epoch_{UINT64_MAX},ambilight_failed_epoch_{UINT64_MAX};
+  std::int64_t ambilight_pts_{-1};
+  int ambilight_stereo_{-1};
+  float ambilight_aspect_{};
+  bool ambilight_active_{};
+  bool ambilight_settled_{};
+  std::chrono::steady_clock::time_point ambilight_updated_{},ambilight_changed_{};
+  double ambilight_report_{};
   XrSwapchain caption_swapchain_{};
   std::vector<Target> caption_targets_;
   XrCompositionLayerQuad caption_quad_{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  XrCompositionLayerCylinderKHR caption_cylinder_{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
   struct GaussianEye{XrSwapchain swapchain{};std::vector<VkImage> images;VideoExtent extent{};};
   std::array<GaussianEye,2> gaussian_eyes_;
 #endif
@@ -183,6 +206,9 @@ public:
     if (uiRenderer_)
       uiRenderer_->setVideoTexture();
     destroy_splats();
+#if CYVR_ENABLE_IMMERSIVE
+    destroy_ambilight();
+#endif
     destroyVideo();
     destroy_captions();
     retained_ = {};
@@ -272,8 +298,9 @@ public:
       retained_ = std::move(image);
     if (!retained_)
       return false;
-    if (last_zoom_ != app->image.zoom) {
+    if (last_zoom_ != app->image.zoom || last_cinema_.width!=app->cinema.width || last_cinema_.distance!=app->cinema.distance || last_cinema_.curvature!=app->cinema.curvature) {
       last_zoom_ = app->image.zoom;
+      last_cinema_=app->cinema;
       zoom_changed_ = std::chrono::steady_clock::now();
     }
     if (measured_epoch_ != retained_.epoch ||
@@ -287,6 +314,9 @@ public:
         app->image.quality > 0 && failed_request_ != app->processing_request;
     if (immersive_ && enhance)
       return false; // Reproject/filter at predicted eye poses, below.
+#if CYVR_ENABLE_IMMERSIVE
+    if(immersive_ && app->projection==0 && app->cinema.curvature>0 && !cylinder_enabled_)return false;
+#endif
     auto controls = app->image;
     controls.quality = enhance ? controls.quality : 0;
     auto extent = VideoExtent{uint32_t(state.width), uint32_t(state.height)};
@@ -427,8 +457,11 @@ public:
   std::vector<const char *> instanceExtensions() const override {
     return {XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME};
   }
+  std::vector<const char*> optionalInstanceExtensions()const override{return {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME};}
   void xrReady(const AndroidXrContext &context) override {
     xr_ = context;
+    cylinder_enabled_=std::find(context.enabledApplicationExtensions.begin(),context.enabledApplicationExtensions.end(),XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME)!=context.enabledApplicationExtensions.end();
+    __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","CINEMA_CAPABILITIES native_cylinder=%d",int(cylinder_enabled_));
     video_placement_.reset();
     video_space_ = XR_NULL_HANDLE;
     space_changes_.clear();
@@ -467,9 +500,20 @@ public:
     auto app=application_();
     if(app && app->session().state().volumetric){try{return gaussian_layers(frame,output,capacity,*app);}catch(const std::exception& e){++app->render_monitor.errors;failed_splat_=app->session().splats().cloud;failed_splat_settings_=app->image;app->session().pause(true);app->show_interface();last_ui().setToast(e.what());return 0;}}
     auto count=video_layers(frame,output,capacity);
+    if(app && count && count<capacity){
+      try {
+        if(const auto halo=ambilight_layer(*app)){
+          for(auto i=count;i>0;--i)output[i]=output[i-1];output[0]=halo;++count;
+        }
+      }catch(const std::exception& e){
+        ambilight_failed_epoch_=retained_.epoch;ambilight_active_=false;
+        __android_log_print(ANDROID_LOG_ERROR,"CyVRPlayer","AMBILIGHT_ERROR %s",e.what());
+        last_ui().setToast(std::string(player_translate(last_ui().settings.language,"Ambilight could not be rendered. Toggle it to retry.")));
+      }
+    }else if(!app || !app->ambilight.enabled){ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;}
     if(app && caption_visible_ && caption_swapchain_ && count<capacity && video_placement_.placed()){
       const auto media=app->session().state();
-      auto pose=video_placement_.screen(app->image);
+      auto pose=video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema);
       if(app->projection)pose=video_placement_.screen(ImageSettings{});
       pose.position=pose.position+rotate(pose.orientation,{0,0,.01f});
       auto& q=caption_quad_;q={XR_TYPE_COMPOSITION_LAYER_QUAD};q.space=video_space_;
@@ -477,8 +521,18 @@ public:
       q.eyeVisibility=XR_EYE_VISIBILITY_BOTH;q.subImage.swapchain=caption_swapchain_;
       q.subImage.imageRect={{0,0},{caption_width_,caption_height_}};
       q.pose={{pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w},{pose.position.x,pose.position.y,pose.position.z}};
-      q.size={app->projection?4.f:4.f*app->image.zoom,(app->projection?4.f:4.f*app->image.zoom)*float(caption_height_)/caption_width_};
-      output[count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&q);
+      const auto w=app->projection?4.f:app->cinema.width*app->image.zoom;
+      q.size={w,w*float(caption_height_)/caption_width_};
+      if(!app->projection && app->cinema.curvature>0 && cylinder_enabled_){
+        auto& cylinder=caption_cylinder_;cylinder={XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        cylinder.space=q.space;cylinder.layerFlags=q.layerFlags;cylinder.eyeVisibility=q.eyeVisibility;cylinder.subImage=q.subImage;
+        const auto radius=app->cinema.radius(app->image.zoom);
+        const auto middle=video_placement_.screen(app->image,app->cinema);
+        const auto center=cylinder_center(middle,radius);
+        cylinder.pose={{center.orientation.x,center.orientation.y,center.orientation.z,center.orientation.w},{center.position.x,center.position.y,center.position.z}};
+        cylinder.radius=std::max(.01f,radius-.01f);cylinder.centralAngle=app->cinema.angle();cylinder.aspectRatio=float(caption_width_)/caption_height_;
+        output[count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder);
+      }else output[count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&q);
     }
     return count;
   }
@@ -491,7 +545,13 @@ public:
     const auto media = app->session().state();
     if (!media.ready || !place_video(frame, *app))
       return 0;
-    if (retained_ && app->image.quality &&
+    const bool projected=retained_ && (app->image.quality || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) && failed_request_!=app->processing_request;
+    const int path=app->projection?4:projected?(app->cinema.curvature>0?3:2):(app->cinema.curvature>0?1:0);
+    if((reported_surface_!=path || reported_cinema_!=app->cinema) && !last_ui().interacting()){
+      reported_surface_=path;reported_cinema_=app->cinema;
+      __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","CINEMA_SURFACE path=%d width=%.3f distance=%.3f curve=%.3f height=%.3f tilt=%.3f roll=%.3f environment=%d ambient=%.3f",path,app->cinema.width,app->cinema.distance,app->cinema.curvature,app->cinema.elevation,app->cinema.pitch,app->cinema.roll,app->cinema.environment,app->cinema.ambient);
+    }
+    if (retained_ && (app->image.quality || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) &&
         failed_request_ != app->processing_request) {
       try {
         return projected_video(frame, output, capacity, *app);
@@ -525,15 +585,15 @@ public:
         rect.extent.height /= 2;
         rect.offset.y = packed * rect.extent.height;
       }
-      const auto pose = video_placement_.screen(app->image);
+      const auto pose = video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema);
       const auto p = pose.position;
       const auto r = pose.orientation;
       q.pose = {{r.x, r.y, r.z, r.w}, { p.x, p.y, p.z }};
       const double par = app->half_stereo && app->stereo
                              ? (app->stereo == 1 ? 2. : .5)
                              : media.pixel_aspect;
-      q.size = {4.f * app->image.zoom,
-                4.f * app->image.zoom /
+      q.size = {app->cinema.width * app->image.zoom,
+                app->cinema.width * app->image.zoom /
                     float(eye_aspect(width_, height_, StereoLayout(app->stereo),
                                      par))};
       if (app->projection) {
@@ -549,7 +609,14 @@ public:
         s.lowerVerticalAngle = -pi * .5f;
         output[eye] =
             reinterpret_cast<const XrCompositionLayerBaseHeader *>(&s);
-      } else
+      } else if(app->cinema.curvature>0 && cylinder_enabled_){
+        auto& cylinder=cylinders_[eye];cylinder={XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        cylinder.space=q.space;cylinder.eyeVisibility=q.eyeVisibility;cylinder.subImage=q.subImage;
+        cylinder.radius=app->cinema.radius(app->image.zoom);cylinder.centralAngle=app->cinema.angle();cylinder.aspectRatio=q.size.width/q.size.height;
+        const auto center=cylinder_center(pose,cylinder.radius);
+        cylinder.pose={{center.orientation.x,center.orientation.y,center.orientation.z,center.orientation.w},{center.position.x,center.position.y,center.position.z}};
+        output[eye]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder);
+      }else
         output[eye] =
             reinterpret_cast<const XrCompositionLayerBaseHeader *>(&q);
     }
@@ -557,6 +624,81 @@ public:
   }
 #endif
 private:
+#if CYVR_ENABLE_IMMERSIVE
+  void destroy_ambilight(){
+    ambilight_capture_.reset();ambilight_.reset();
+    if(ambilight_swapchain_)xrDestroySwapchain(ambilight_swapchain_);
+    ambilight_swapchain_=XR_NULL_HANDLE;ambilight_images_.clear();ambilight_active_=false;
+    ambilight_epoch_=ambilight_failed_epoch_=UINT64_MAX;ambilight_pts_=-1;
+  }
+  void create_ambilight(){
+    if(ambilight_ && ambilight_capture_ && ambilight_swapchain_ && !ambilight_images_.empty())return;
+    destroy_ambilight();
+    ambilight_=std::make_unique<AmbilightRenderer>(*gpu_,format_,assets_);
+    ambilight_capture_=std::make_unique<VideoRenderer>(*gpu_,format_,assets_);
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    info.format=format_;info.sampleCount=1;info.width=info.height=128;info.faceCount=info.arraySize=info.mipCount=1;
+    xrCheck(xrCreateSwapchain(xr_.session,&info,&ambilight_swapchain_),"ambilight swapchain");
+    uint32_t count{};xrCheck(xrEnumerateSwapchainImages(ambilight_swapchain_,0,&count,nullptr),"ambilight images count");
+    std::vector<XrSwapchainImageVulkanKHR> images(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    xrCheck(xrEnumerateSwapchainImages(ambilight_swapchain_,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),"ambilight images");
+    for(const auto& image:images)ambilight_images_.push_back(image.image);
+  }
+  const XrCompositionLayerBaseHeader* ambilight_layer(PlayerApplication& app){
+    const auto media=app.session().state();
+    if(!app.ambilight.enabled || app.projection || media.volumetric || !retained_ || !video_placement_.placed()){
+      ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;return nullptr;
+    }
+    if(ambilight_failed_epoch_==retained_.epoch)return nullptr;
+    create_ambilight();
+    const auto now=std::chrono::steady_clock::now();
+    auto image=app.image;image.quality=0;image.zoom=1;image.pan_x=image.pan_y=0;
+    const bool first=!ambilight_active_ || ambilight_epoch_!=retained_.epoch;
+    const bool capture=first || ambilight_pts_!=retained_.pts_us || ambilight_image_!=image || ambilight_stereo_!=app.stereo;
+    const float par=app.half_stereo && app.stereo?(app.stereo==1?2.f:.5f):media.pixel_aspect;
+    const float aspect=float(eye_aspect(media.width,media.height,StereoLayout(app.stereo),par));
+    const bool settingsChanged=ambilight_settings_!=app.ambilight || ambilight_aspect_!=aspect;
+    const float dt=std::chrono::duration<float>(now-ambilight_updated_).count();
+    const bool settle=!capture && !settingsChanged && std::chrono::duration<float>(now-ambilight_changed_).count()>=5*app.ambilight.smoothing;
+    const bool update=first || (dt>=1.f/30 && (capture || settingsChanged || !ambilight_settled_));
+    if(update){
+      if(first || settle)ambilight_->reset();
+      if(capture){
+        VideoView mapping;mapping.kind=6;
+        ambilight_capture_->draw_view(ambilight_->source_image(),{64,36},{64,36},retained_,image,app.stereo,mapping,true);
+      }
+      uint32_t index{};XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+      xrCheck(xrAcquireSwapchainImage(ambilight_swapchain_,&acquire,&index),"ambilight acquire");
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=XR_INFINITE_DURATION;
+      xrCheck(xrWaitSwapchainImage(ambilight_swapchain_,&wait),"ambilight wait");
+      try{ambilight_->process(ambilight_images_.at(index),app.ambilight,aspect,dt);}
+      catch(...){XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrReleaseSwapchainImage(ambilight_swapchain_,&release);throw;}
+      XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrCheck(xrReleaseSwapchainImage(ambilight_swapchain_,&release),"ambilight release");
+      if(capture || settingsChanged)ambilight_changed_=now;
+      ambilight_updated_=now;ambilight_settings_=app.ambilight;ambilight_image_=image;ambilight_settled_=settle || app.ambilight.smoothing==0;
+      ambilight_epoch_=retained_.epoch;ambilight_pts_=retained_.pts_us;ambilight_stereo_=app.stereo;ambilight_aspect_=aspect;ambilight_active_=true;
+      const auto time=std::chrono::duration<double>(now.time_since_epoch()).count();
+      if(time-ambilight_report_>=5){ambilight_report_=time;const auto captureMs=capture?ambilight_capture_->gpu_ms():std::optional<double>(0);
+        const auto glowMs=ambilight_->gpu_ms();__android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","AMBILIGHT capture=64x36 glow=128x128 capture_gpu_ms=%.3f glow_gpu_ms=%.3f curve=%.2f",captureMs.value_or(-1),glowMs.value_or(-1),app.cinema.curvature);}
+    }
+    const auto middle=video_placement_.screen(app.image,app.cinema);
+    const float width=app.cinema.width*app.image.zoom,outerW=width*(1+2*app.ambilight.spread),outerH=width/aspect+2*width*app.ambilight.spread;
+    auto pose=middle;pose.position=pose.position+rotate(pose.orientation,{0,0,-.02f});
+    auto& quad=ambilight_quad_;quad={XR_TYPE_COMPOSITION_LAYER_QUAD};quad.space=video_space_;
+    quad.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;quad.eyeVisibility=XR_EYE_VISIBILITY_BOTH;
+    quad.subImage.swapchain=ambilight_swapchain_;quad.subImage.imageRect={{0,0},{128,128}};
+    quad.pose={{pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w},{pose.position.x,pose.position.y,pose.position.z}};quad.size={outerW,outerH};
+    if(app.cinema.curvature>0 && cylinder_enabled_){
+      auto& cylinder=ambilight_cylinder_;cylinder={XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};cylinder.space=quad.space;cylinder.layerFlags=quad.layerFlags;cylinder.eyeVisibility=quad.eyeVisibility;cylinder.subImage=quad.subImage;
+      const auto radius=app.cinema.radius(app.image.zoom);const auto center=cylinder_center(middle,radius);
+      cylinder.pose={{center.orientation.x,center.orientation.y,center.orientation.z,center.orientation.w},{center.position.x,center.position.y,center.position.z}};
+      cylinder.radius=radius+.02f;cylinder.centralAngle=app.cinema.angle()*(1+2*app.ambilight.spread);cylinder.aspectRatio=outerW/outerH;
+      return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder);
+    }
+    return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
+  }
+#endif
   void destroy_splats(){
     splat_renderer_.reset();rendered_splat_.reset();failed_splat_.reset();
 #if CYVR_ENABLE_IMMERSIVE
@@ -837,7 +979,7 @@ private:
           view.fov.angleUp <= view.fov.angleDown)
         return 0;
     const auto media = app.session().state();
-    const auto videoPose = video_placement_.screen(app.image);
+    const auto videoPose = video_placement_.screen(app.image,app.projection?CinemaSettings{}:app.cinema);
     const auto videoPosition = videoPose.position;
     const auto inverse = inverse_rotation(videoPose.orientation);
     const double par = app.half_stereo && app.stereo
@@ -845,13 +987,14 @@ private:
                            : media.pixel_aspect;
     const float aspect = float(
         eye_aspect(media.width, media.height, StereoLayout(app.stereo), par));
-    const float screenW = 4 * app.image.zoom, screenH = screenW / aspect;
+    const float screenW = app.cinema.width * app.image.zoom, screenH = screenW / aspect;
     std::array<ViewProcessingPlan, 2> plans;
     std::array<VideoView, 2> mapping;
     for (int i = 0; i < 2; ++i) {
       const auto &view = views[i];
       auto &map = mapping[i];
       map.kind = app.projection == 0 ? 2 : app.projection == 1 ? 3 : 4;
+      if(!app.projection && app.cinema.curvature>0)map.kind=5;
       map.eye = app.swap_eyes ? 1 - i : i;
       map.fov[0] = std::tan(view.fov.angleLeft);
       map.fov[1] = std::tan(view.fov.angleRight);
@@ -865,16 +1008,20 @@ private:
                               videoPosition);
       map.screen_width = screenW;
       map.screen_height = screenH;
+      map.screen_radius=app.cinema.radius(app.image.zoom);
       const float hfov = view.fov.angleRight - view.fov.angleLeft,
                   vfov = view.fov.angleUp - view.fov.angleDown;
       const float crop = app.projection ? app.image.zoom : 1;
       const float sourceW = media.width / float(app.stereo == 1 ? 2 : 1) / crop,
                   sourceH =
                       media.height / float(app.stereo == 2 ? 2 : 1) / crop;
+      const auto distance=std::max(.1f,map.origin.z);
+      const auto halfAngle=app.cinema.angle()*.5f;
+      const float cinemaAngular=map.screen_radius>0?2*std::atan2(map.screen_radius*std::sin(halfAngle),distance-map.screen_radius*(1-std::cos(halfAngle))):2*std::atan(screenW/(2*distance));
       const float angularW = app.projection
                                  ? (app.projection == 1 ? pi : 2 * pi)
-                                 : 2 * std::atan(screenW / 7.f);
-      const float angularH = app.projection ? pi : 2 * std::atan(screenH / 7.f);
+                                 : std::max(.01f,cinemaAngular);
+      const float angularH = app.projection ? pi : 2 * std::atan(screenH / (2*distance));
       const VideoExtent available{
           uint32_t(std::max(1.f, std::ceil(sourceW * hfov / angularW))),
           uint32_t(std::max(1.f, std::ceil(sourceH * vfov / angularH)))};
@@ -887,7 +1034,7 @@ private:
         plans[i].input = previous.input;
     }
     const bool configChanged =
-        !initialized_ || rendered_image_ != app.image ||
+        !initialized_ || rendered_image_ != app.image || rendered_cinema_!=app.cinema ||
         rendered_stereo_ != app.stereo ||
         rendered_projection_ != app.projection ||
         rendered_swap_ != app.swap_eyes ||
@@ -954,6 +1101,7 @@ private:
                           app.projection);
     }
     rendered_image_ = app.image;
+    rendered_cinema_=app.cinema;
     rendered_stereo_ = app.stereo;
     rendered_projection_ = app.projection;
     rendered_swap_ = app.swap_eyes;

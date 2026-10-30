@@ -194,15 +194,26 @@ int main() {
       state.tracks={3,5,8,"content://test/document/captions"};
       state.tracks.clearkey_file="content://test/document/keys.jwk";
       state.tracks_open=true;state.track_tab=2;state.track_offset=7;
+      state.cinema={};state.cinema.environment=6;state.cinema.width=7.5f;state.cinema.curvature=75;state.cinema.distance=5;state.cinema.pitch=20;state.cinema.ambient=.15f;state.cinema_tab=2;state.ambilight.enabled=true;state.ambilight.intensity=1.4f;state.ambilight.smoothing=.75f;
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
+      if(!loaded || loaded->cinema!=state.cinema || loaded->cinema_tab!=2 || loaded->ambilight!=state.ambilight)throw std::runtime_error("Cinema settings were not retained across activity replacement");
       if (!loaded || loaded->source != state.source ||
           loaded->position_us != 1234567 || loaded->playing ||
           loaded->parents != state.parents || loaded->image != state.image ||
           loaded->display_tab != 2 || loaded->tracks.video!=3 || loaded->tracks.audio!=5 || loaded->tracks.subtitle!=8 || loaded->tracks.external_subtitle!=state.tracks.external_subtitle || loaded->tracks.clearkey_file!=state.tracks.clearkey_file || !loaded->tracks_open || loaded->track_tab!=2 || loaded->track_offset!=7)
         throw std::runtime_error(
             "Document or paused position lost during state transfer");
+      // A checkpoint from the installed pre-Ambilight cinema build retains all
+      // screen settings and defaults the new optional effect to off.
+      {
+        std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();
+        const auto tag=bytes.find(std::string("1BMA\0\0\0\0",8));if(tag==std::string::npos)throw std::runtime_error("Ambilight extension missing");bytes.resize(tag);
+        std::ofstream old(platform.state_file,std::ios::binary|std::ios::trunc);old.write(bytes.data(),bytes.size());old.close();
+        const auto cinemaOnly=load_application_state(platform.state_file);if(!cinemaOnly || cinemaOnly->cinema!=state.cinema || cinemaOnly->ambilight!=AmbilightSettings{})throw std::runtime_error("Pre-Ambilight checkpoint migration lost cinema settings");
+        if(!save_application_state(platform.state_file,state))throw std::runtime_error("Checkpoint restore failed");
+      }
       // Previous app versions wrote the same base record without the optional
       // extension.
       {
@@ -221,6 +232,7 @@ int main() {
           loaded->image != ImageSettings{})
         throw std::runtime_error(
             "Legacy state migration lost source or neutral defaults");
+      if(loaded->cinema!=CinemaSettings{})throw std::runtime_error("Legacy checkpoints did not receive neutral screen/default cinema settings");
       state.url = std::string(300000, 'x');
       if (save_application_state(platform.state_file, state) ||
           !load_application_state(platform.state_file))
@@ -256,6 +268,17 @@ int main() {
         controllerClick(1361,hand);
         if(!model.compactInterface || model.interfaceHidden)throw std::runtime_error("Compact controls click was lost on trigger release");
       }
+      controllerClick(1662,0);
+      if(model.compactInterface || app.page()!=3 || app.snapshot().display_tab!=3)throw std::runtime_error("Compact cinema shortcut did not open its settings");
+      click(1661);click(1611);app.tick();
+      if(model.settings.background!=Background::Dark)throw std::runtime_error("Cinema background did not reach the shared immersive host");
+      click(1660);model.handleApplicationSlider(1640,.5f,SliderPhase::Commit);model.handleApplicationSlider(1641,.25f,SliderPhase::Commit);model.handleApplicationSlider(1642,.5f,SliderPhase::Commit);
+      if(app.cinema.width!=6.5f || app.cinema.distance!=3.75f || app.cinema.curvature!=60)throw std::runtime_error("Cinema geometry sliders did not apply");
+      click(1663);click(1670);model.handleApplicationSlider(1648,.8f,SliderPhase::Commit);model.handleApplicationSlider(1649,.4f,SliderPhase::Commit);model.handleApplicationSlider(1650,.5f,SliderPhase::Commit);
+      if(!app.ambilight.enabled || app.ambilight.intensity!=1.6f || app.ambilight.smoothing!=.75f || app.snapshot().cinema_tab!=2)throw std::runtime_error("Ambilight controls did not apply");
+      click(1672);if(app.ambilight!=AmbilightSettings{})throw std::runtime_error("Ambilight reset failed");
+      AmbilightSettings invalid;invalid.intensity=NAN;invalid.spread=100;invalid.smoothing=-1;invalid.sanitize();if(invalid.intensity!=.7f || invalid.spread!=.6f || invalid.smoothing!=0)throw std::runtime_error("Ambilight settings bounds failed");
+      app.cinema={};app.action(1001);
       if(!isDockWidget(600) || !isDockWidget(611) || isDockWidget(605))throw std::runtime_error("Dock routing broke the dock or main drag handle");
       model.presentation=Presentation::Panel2D;app.tick();
       model.setInterfaceHidden(true);

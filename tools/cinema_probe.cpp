@@ -103,6 +103,14 @@ int main(int argc, char **argv) {
         out.write(reinterpret_cast<const char *>(pixels.data() + i), 3);
       renderer.destroyTarget(target);
     }
+    app.show_interface();ui.presentation=Presentation::Immersive;app.tick();app.action(1662);
+    for(const auto language:{"en","fr"})for(int tab=0;tab<3;++tab){
+      ui.setLanguage(language);app.action(tab==2?1663:1660+tab);app.tick();DrawList settings;ui.drawMain(settings);
+      auto target=renderer.createTarget(1440,990);renderer.draw(target,settings);const auto pixels=renderer.readback(target);
+      std::ofstream out(std::string(argv[3])+".cinema-"+language+"-"+std::to_string(tab)+".ppm",std::ios::binary);
+      out<<"P6\n1440 990\n255\n";for(std::size_t i=0;i<pixels.size();i+=4)out.write(reinterpret_cast<const char*>(pixels.data()+i),3);
+      renderer.destroyTarget(target);
+    }
     std::cout << "Cinema Vulkan: 1920x1080 and 1600x1100, source aspect "
                  "preserved, video only, "
                  "wake consumed\n";
