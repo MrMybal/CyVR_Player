@@ -44,11 +44,15 @@ def main():
     with zipfile.ZipFile(apk) as archive,apk.open('rb') as raw:
         names=set(archive.namelist())
         if not args.panel_only:
+            expected_pbr={'basecolor','normal-rough-metal','brdf','lounge','observatory','terrace','lighting-lounge','lighting-observatory','lighting-terrace'}
+            for material in expected_pbr:
+                assert 'assets/pbr/'+material+'.bin' in names,material
             for photo in ('lebombo','venice_sunset'):
                 assert jpeg_dimensions(archive.read('assets/scenes/'+photo+'.jpg'))==(4096,2048), 'Cinema backgrounds must retain their bundled 4K resolution'
             assert 'assets/licenses/CyVR_UI-environments-CC0.txt' in names and 'assets/licenses/CyVR_UI-environment-credits.md' in names
         assert ('lib/arm64-v8a/libopenxr_loader.so' in names)==(not args.panel_only)
         if args.panel_only:
+            assert not any(name.startswith('assets/pbr/') for name in names),'2D-only must not bundle 3D scene resources'
             native=archive.read('lib/arm64-v8a/libcyvr_player.so')
             assert b'xrCreateInstance' not in native and b'libopenxr_loader.so' not in native
         for required in ['classes.dex','assets/video.vert.spv','assets/video.frag.spv','assets/video_filter.frag.spv',

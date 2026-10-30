@@ -182,6 +182,12 @@ void effect_tests() {
 }
 void performance_tests() {
   ImageSettings settings;
+  require(!settings.reconstruct_view(),"Neutral image must retain native compositor path");
+  settings.sampling=2;settings.denoise=NAN;settings.detail=INFINITY;settings.sanitize();
+  require(settings.reconstruct_view() && settings.denoise==0 && settings.detail==0,"Invalid spatial settings must sanitize without enabling expensive taps");
+  auto spatial=view_processing_plan({1680,1760},{7680,3840},settings);
+  require(spatial.input.width==1680 && spatial.input.height==1760,"Native spatial filters must target the displayed view, not the entire panorama");
+  settings={};
   settings.quality = 2;
   auto plan = view_processing_plan({1680, 1760}, {512, 512}, settings);
   require(plan.output.width == 1680 && plan.output.height == 1760,

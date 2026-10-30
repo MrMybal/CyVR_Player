@@ -4,7 +4,7 @@ Version 0.4.4 keeps video decoding in MediaCodec and rendering in Vulkan. No new
 
 ## Processing paths
 
-The Android renderer retains one completed `AImage` lease so an image can be redrawn while paused. It consumes the acquisition FD once, waits for every GPU read, and transfers FOREIGN ownership around each read. Together with the three queued source images, this stays within the reader's six-image limit. Imported AHBs remain bounded to twelve and are cleared on epoch changes. The retained lease is released on source stop and device shutdown.
+The Android renderer retains one completed `AImage` lease so an image can be redrawn while paused. It consumes the acquisition FD once, waits for every GPU read, and transfers FOREIGN ownership around each read. Together with the three queued source images, this stays within the reader's six-image limit. Imported AHBs remain bounded to 64 and are cleared on epoch changes. The retained lease is released on source stop and device shutdown.
 
 Native mode performs YCbCr conversion, BT.709 SDR inverse transfer, correction and per-eye digital crop in one pass. The attachment is sRGB. Neutral controls do not add an intermediate image or lower decoder resolution.
 
@@ -20,7 +20,7 @@ In the 2D host the processed picture is aspect-fitted to the window and zoom dig
 
 ## Bounds and saved settings
 
-Settings sanitize non-finite and out-of-range values. Exposure is −2…+2 EV, contrast 0.5…1.5, saturation 0…2, gamma 0.5…2, zoom 1…4, pan −1…+1 and strength 0…1. Output choices are the headset/window target (default), then 1.25x, 1.5x and 2x that target. They are always selectable. There is no fixed 16,777,216-pixel filter cap; Vulkan image dimension/allocation limits still apply. A failure preserves the chosen algorithm and factor, reports an explicit error and temporarily uses native rendering; another algorithm/factor request retries processing.
+Settings sanitize non-finite and out-of-range values. Exposure is −2…+2 EV, contrast 0.5…1.5, saturation 0…2, gamma 0.5…2, zoom 0.25…4 in VR180 (1…4 in cinema/360°), pan −1…+1 and strength 0…1. Output choices are the headset/window target (default), then 1.25x, 1.5x and 2x that target. They are always selectable. There is no fixed 16,777,216-pixel filter cap; Vulkan image dimension/allocation limits still apply. A failure preserves the chosen algorithm and factor, reports an explicit error and temporarily uses native rendering; another algorithm/factor request retries processing.
 
 The IMG2 tagged settings extension in `player-state.bin` preserves existing base records. Older IMG1 records retain corrections/algorithm but reset their source-relative factor to the new default display target. New settings survive process/activity replacement. Hiding the interface remains transient. Position-only checkpoints are now spaced five seconds apart to reduce render-thread file I/O; user changes and lifecycle transitions still save promptly.
 
@@ -46,7 +46,7 @@ GSR 2 was reviewed but not integrated: its documented color/depth/velocity/histo
 
 ## Reproducible checks
 
-`build_app.py --target windows` runs seven CTest suites. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (174 cases, including pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
+`build_app.py --target windows` runs eleven CTest suites with CyVR_UI 0.8.0. The GPU suite checks every pixel for constant-color preservation and opposite-eye isolation in native/CAS/FSR/GSR, with zoom/pan, then checks neutral/exposure transfer, grayscale conversion, center crop and effective sharpening on a detailed low-contrast pattern (1,060 cases, including spatial interpolation/noise/detail checks, VR180 zoom-out, Ambilight, and pixel-identical separate/combined submissions, actual projection before filtering in SBS/TB and all view types, transparent-edge color preservation, and anisotropic detail preservation for FSR/GSR). Application tests cover asynchronous thumbnail production, correction gestures, transform bounds, grip/trigger consumption, timeline seeking, new-state transfer and old-state migration.
 
 ```powershell
 build/app-windows/cyvr_image_probe.exe build/app-windows/assets --benchmark
@@ -84,3 +84,11 @@ The effect is a composited colour surround, not physical room illumination. It a
 Some decoder output pools contain more than twelve hardware buffers. The previous importer cleared its complete cache at that threshold and recreated a shader pipeline for every subsequent image. The importer now retains up to 64 images, evicts only the least recently used entry, and reuses a Vulkan pipeline compilation cache. Epoch changes still discard old imported images; no video downscale, filter substitution or decoder/frame-rate cap is introduced. Native, CAS, FSR, GSR and Ambilight's capture use the same importer. Optional stage diagnostics separate import/compilation, GPU completion, native compositor acquisition and host CPU work.
 
 The `cyvr_video_cache_probe` Android tool exercises distinct original RGBA hardware buffers, verifies image pixels, and checks generation invalidation and the 64-entry bound. Cache timings describe this diagnostic workload and do not establish full application FPS. `cyvr_video_gpu_probe` separately exercises actual MediaCodec/video-clock playback.
+
+## 0.4.11 source filtering and CyVR_UI 0.8.0
+
+The Original/Bilinear/Bicubic selection is implemented in the decoded-source projection shader, before SDR/HDR transfer and corrections. Manual normalized taps support external YCbCr samplers without requiring hardware linear-conversion support. Catmull–Rom uses 16 taps with ringing clamped to its sampled range. Optional edge-aware spatial denoising and detail share a Gaussian 3×3 neighborhood. Denoising weights small encoded RGB differences; detail suppresses small residuals, with at most 2% encoded overshoot. These controls are spatial, without motion estimation or temporal history. All taps clamp within the cropped eye; no opposite-eye samples or alpha extrapolation are introduced.
+
+All optional source filters are neutral/off by default. Enabling one selects the displayed-view path, including when the upscaler is Native: no enlarged full-panorama filter allocation is required. CAS/FSR/GSR receive the filtered projection once, then apply their existing reconstruction/strength and color corrections. The new values occupy unused fields in the existing 128-byte projection push constants. Filter changes redraw paused pictures without importing the retained AHB again. A tagged FLT1 state extension preserves older checkpoints and defaults its missing fields to off.
+
+CyVR_UI 0.8.0 retains the modeled scene in a static GPU vertex buffer, with its PBR assets and triangle-baked lighting. The player explicitly includes these resources for hybrid builds, validates their source/asset checksums before building, and excludes them in strictly 2D builds. Foundation GPU tests exercise scene parallax, floor anchoring, scene-backed glass, depth, AR alpha, materials, optional panoramas and descriptor rebinding. They are also available as `cyvr_foundation_gpu_probe` on Android. These checks establish rendering behavior, not sustained playback FPS or thermal performance.

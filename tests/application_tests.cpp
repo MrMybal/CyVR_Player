@@ -112,6 +112,25 @@ int main() {
           if(!w.enabled)throw std::runtime_error("A quality/display-target control was disabled");
         }
       if(quality_controls!=8)throw std::runtime_error("A quality/display-target control is missing");
+      for(const char* language:{"en","fr"}){
+        model.setLanguage(language);model.drawMain(draw);
+        for(int id:{1350,1351,1352,1353,1348,1349}){
+          bool found=false;
+          for(const auto& w:model.widgets())if(w.id==id){
+            found=true;if(!w.enabled || w.rect.y<304 || w.rect.y+w.rect.h>929)
+              throw std::runtime_error("Spatial filter control disabled or outside content bounds");
+          }
+          if(!found)throw std::runtime_error("Spatial filter control missing");
+        }
+        click(1352);
+        model.handleApplicationSlider(1348,.65f,SliderPhase::Commit);
+        model.handleApplicationSlider(1349,.8f,SliderPhase::Commit);
+        if(app.image.sampling!=2 || std::abs(app.image.denoise-.65f)>1e-5 || std::abs(app.image.detail-.8f)>1e-5 || !app.image.reconstruct_view())
+          throw std::runtime_error("Spatial filter interactions failed");
+        click(1353);
+        if(app.image.reconstruct_view())throw std::runtime_error("Disabling spatial filters did not restore native path");
+      }
+      model.setLanguage("en");
       click(1300);
       click(1031);
       click(1042);
@@ -190,6 +209,7 @@ int main() {
       state.image.exposure = 1;
       state.image.quality = 2;
       state.image.zoom = 2.25f;
+      state.image.sampling=2;state.image.denoise=.65f;state.image.detail=.8f;
       state.auto_format=true;
       state.display_tab = 2;
       state.tracks={3,5,8,"content://test/document/captions"};
@@ -200,6 +220,17 @@ int main() {
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
+      if(!loaded || loaded->image!=state.image)throw std::runtime_error("Spatial image settings lost during checkpoint transfer");
+      {
+        std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();
+        const auto tag=bytes.find(std::string("1TLF\0\0\0\0",8));if(tag==std::string::npos)throw std::runtime_error("Spatial image extension missing");bytes.resize(tag);
+        std::ofstream old(platform.state_file,std::ios::binary|std::ios::trunc);old.write(bytes.data(),bytes.size());old.close();
+        const auto migrated=load_application_state(platform.state_file);
+        auto expected=state.image;expected.sampling=0;expected.denoise=expected.detail=0;
+        if(!migrated || migrated->image!=expected || migrated->auto_format!=state.auto_format || migrated->tracks.disc_title!=state.tracks.disc_title)
+          throw std::runtime_error("Previous checkpoint migration altered existing settings");
+        if(!save_application_state(platform.state_file,state))throw std::runtime_error("Spatial checkpoint restore failed");
+      }
       if(!loaded || !loaded->auto_format)throw std::runtime_error("Auto-detection preference lost during state transfer");
       {
         std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();

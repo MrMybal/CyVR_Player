@@ -14,7 +14,7 @@ struct VideoView {
 };
 // Exact shared layout consumed by video.frag on Android and in the GPU probe.
 struct alignas(16) VideoPush {
-  float crop[4]{0, 0, 1, 1}, controls[4]{0, 1, 1, 1}, view[4]{1, 0, 0, .5f};
+  float crop[4]{0, 0, 1, 1}, controls[4]{0, 1, 1, 1}, view[4]{1, 0, 0, 0};
   int format[4]{};
   float fov[4]{-1, 1, 1, -1}, rotation[4]{0, 0, 0, 1}, origin[4]{},
       screen[4]{4, 2.25f, 0, 0};
@@ -34,11 +34,13 @@ inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
   p.view[0] = settings.zoom;
   p.view[1] = settings.pan_x;
   p.view[2] = settings.pan_y;
-  p.view[3] = settings.sharpness;
+  // Spatial source controls fit the Vulkan-guaranteed 128-byte push budget.
+  // CAS/FSR/GSR strength is passed separately to ImageProcessor.
+  p.view[3] = settings.detail;
   p.format[0] = stereo;
   p.format[1] = mapping.kind;
   p.format[2] = mapping.eye;
-  p.format[3] = color.transfer | (color.standard << 8);
+  p.format[3] = color.transfer | (color.standard << 8) | (settings.sampling << 16);
   std::copy(mapping.fov, mapping.fov + 4, p.fov);
   const auto q = mapping.orientation;
   p.rotation[0] = q.x;
@@ -48,6 +50,7 @@ inline VideoPush video_push(cyvr::Rect crop, const ImageSettings &settings,
   p.origin[0] = mapping.origin.x;
   p.origin[1] = mapping.origin.y;
   p.origin[2] = mapping.origin.z;
+  p.origin[3] = settings.denoise;
   p.screen[0] = mapping.screen_width;
   p.screen[1] = mapping.screen_height;
   p.screen[2] = color.peak_nits;

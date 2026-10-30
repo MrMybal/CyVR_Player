@@ -21,6 +21,8 @@ ANDROID_JAR=SDK/'platforms/android-34/android.jar'
 def run(*args):subprocess.run([str(a) for a in args],check=True,cwd=ROOT)
 def configure(target,immersive=True,alpha=False):
     foundation=foundation_sources(UI)
+    if immersive and (UI/'tools/prepare_pbr.py').is_file():
+        run('python',UI/'tools/prepare_pbr.py','--check')
     if target=='android':
         media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if alpha else 'android-arm64')
         origin=media/'origin.json'

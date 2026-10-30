@@ -318,7 +318,7 @@ public:
       app->render_monitor.work.reset();
     }
     const bool enhance =
-        app->image.quality > 0 && failed_request_ != app->processing_request;
+        app->image.reconstruct_view() && failed_request_ != app->processing_request;
     if (immersive_ && enhance)
       return false; // Reproject/filter at predicted eye poses, below.
 #if CYVR_ENABLE_IMMERSIVE
@@ -326,6 +326,9 @@ public:
 #endif
     auto controls = app->image;
     controls.quality = enhance ? controls.quality : 0;
+    if (!enhance && failed_request_ == app->processing_request) {
+      controls.sampling=0;controls.denoise=controls.detail=0;
+    }
     auto extent = VideoExtent{uint32_t(state.width), uint32_t(state.height)};
     ViewProcessingPlan plan{extent, extent};
     if (enhance) {
@@ -555,13 +558,13 @@ public:
     const auto media = app->session().state();
     if (!media.ready || !place_video(frame, *app))
       return 0;
-    const bool projected=retained_ && (app->image.quality || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) && failed_request_!=app->processing_request;
+    const bool projected=retained_ && (app->image.reconstruct_view() || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) && failed_request_!=app->processing_request;
     const int path=app->projection?4:projected?(app->cinema.curvature>0?3:2):(app->cinema.curvature>0?1:0);
     if((reported_surface_!=path || reported_cinema_!=app->cinema) && !last_ui().interacting()){
       reported_surface_=path;reported_cinema_=app->cinema;
       __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","CINEMA_SURFACE path=%d width=%.3f distance=%.3f curve=%.3f height=%.3f tilt=%.3f roll=%.3f environment=%d ambient=%.3f",path,app->cinema.width,app->cinema.distance,app->cinema.curvature,app->cinema.elevation,app->cinema.pitch,app->cinema.roll,app->cinema.environment,app->cinema.ambient);
     }
-    if (retained_ && (app->image.quality || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) &&
+    if (retained_ && (app->image.reconstruct_view() || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) &&
         failed_request_ != app->processing_request) {
       try {
         return projected_video(frame, output, capacity, *app);

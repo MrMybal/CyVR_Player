@@ -6,6 +6,7 @@ layout(push_constant) uniform Crop {
     vec4 uvRect; vec4 controls; vec4 view; ivec4 format;
     vec4 fov; vec4 rotation; vec4 origin; vec4 screen;
 } crop;
+#include "video_sampling.glsl"
 layout(location=0) in vec2 uv;
 layout(location=0) out vec4 color;
 vec3 rotateRay(vec4 q,vec3 v){return v+2.*cross(q.xyz,cross(q.xyz,v)+q.w*v);}
@@ -22,7 +23,7 @@ vec3 videoLinear(vec3 e) {
         c*=1000.*pow(max(dot(c,vec3(.2627,.678,.0593)),0.),.2);
     }else if(transfer==1)c=e;
     else c=mix(e/4.5,pow((e+.099)/1.099,vec3(1./.45)),greaterThanEqual(e,vec3(.081)));
-    if((crop.format.w>>8)==6)c=mat3(1.660491,-.124550,-.018151,-.587641,1.132900,-.100579,-.072850,-.008349,1.118730)*c;
+    if(((crop.format.w>>8)&255)==6)c=mat3(1.660491,-.124550,-.018151,-.587641,1.132900,-.100579,-.072850,-.008349,1.118730)*c;
     c=max(c,vec3(0));
     if(hdr){
         float luminance=dot(c,vec3(.2126,.7152,.0722));
@@ -85,11 +86,11 @@ void main(){
     if(kind==4)local.x=fract(local.x);
     vec2 halfPixel=.5*eyes/(vec2(textureSize(video,0))*crop.uvRect.zw);
     local=clamp(local,halfPixel,1.-halfPixel);
-    vec3 encoded=max(texture(video,crop.uvRect.xy+(eye+local)/eyes*crop.uvRect.zw).rgb,vec3(0));
+    vec3 encoded=max(sampleVideo(local,eye,eyes),vec3(0));
     vec3 linear=videoLinear(encoded);
     if(kind==6 && crop.format.x!=0){
       vec2 other=vec2(crop.format.x==1?1:0,crop.format.x==2?1:0);
-      linear=.5*(linear+videoLinear(max(texture(video,crop.uvRect.xy+(other+local)/eyes*crop.uvRect.zw).rgb,vec3(0))));
+      linear=.5*(linear+videoLinear(max(sampleVideo(local,other,eyes),vec3(0))));
     }
     // Keep edge RGB beneath transparent coverage. Spatial reconstruction taps
     // must not treat the cinema/VR180 boundary as a black part of the video.

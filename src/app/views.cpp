@@ -334,7 +334,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                       float lo, float hi) {
       d.text(36, y + 8, 22, tr(label), white);
       d.text(365, y + 8, 22,
-             (id==1646 || id==1647 || id==1648 || id==1649 || id==1652)?cyvr::formatNumber(ui_.settings.language,value*100,0)+" %":cyvr::formatNumber(ui_.settings.language, value, 2), accent);
+             (id==1348 || id==1349 || id==1646 || id==1647 || id==1648 || id==1649 || id==1652)?cyvr::formatNumber(ui_.settings.language,value*100,0)+" %":cyvr::formatNumber(ui_.settings.language, value, 2), accent);
       const float f = std::clamp((value - lo) / (hi - lo), 0.f, 1.f);
       const cyvr::Rect r{470, y, 934, 48};
       d.rect({r.x, y + 20, r.w, 8}, surface, 4);
@@ -388,25 +388,31 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
              muted);
     } else if(display_tab_==2) {
       for (int i = 0; i < 4; ++i)
-        button(d, 1310 + i, {36.f + i * 343, 350, 328, 68},
+        button(d, 1310 + i, {36.f + i * 343, 324, 328, 56},
                i == 0   ? "Native"
                : i == 1 ? "FidelityFX CAS"
                : i == 2 ? "FSR 1 (EASU + RCAS)"
                         : "Snapdragon GSR 1",
                image.quality == i);
-      d.text(36, 462, 22, tr("Display resolution"), muted);
+      d.text(36, 394, 21, tr("Display resolution"), muted);
       for (int i = 0; i < 4; ++i)
-        button(d, 1320 + i, {36.f + i * 343, 508, 328, 68},
+        button(d, 1320 + i, {36.f + i * 343, 426, 328, 52},
                i == 0   ? "Headset / window"
                : i == 1 ? "1.25x"
                : i == 2 ? "1.5x"
                         : "2x",
                image.upscale == i);
-      slider(1347, 634, "Sharpness", image.sharpness, 0, 1);
-      button(d, 1330, {36, 758, 340, 60}, "Reset image");
+      slider(1347, 494, "CAS / FSR / GSR sharpness", image.sharpness, 0, 1);
+      d.text(36, 558, 21, tr("Image smoothing"), muted);
+      for(int i=0;i<3;++i)
+        button(d,1350+i,{36.f+i*458,590,444,52},i==0?"Original (fast)":i==1?"Bilinear":"Bicubic",image.sampling==i);
+      slider(1348, 658, "Noise reduction", image.denoise, 0, 1);
+      slider(1349, 718, "Fine detail", image.detail, 0, 1);
+      button(d, 1353, {36, 784, 444, 52}, "Disable spatial filters");
+      button(d, 1330, {498, 784, 340, 52}, "Reset image");
       d.text(
-          36, 850, 21,
-          tr("Reconstructs the displayed view / UI stays at native resolution"),
+          36, 855, 19,
+          tr("Bicubic and noise reduction cost more GPU time; default: Off."),
           muted);
       d.text(36, 885, 19,
              fit(d,

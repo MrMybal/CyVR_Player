@@ -10,6 +10,11 @@ struct ImageSettings {
   float zoom{1}, pan_x{}, pan_y{}, sharpness{.5f};
   int quality{}; // 0 native, 1 AMD CAS, 2 AMD FSR 1, 3 Snapdragon GSR 1
   int upscale{}; // Display target: 0 runtime/native, 1 1.25x, 2 1.5x, 3 2x.
+  int sampling{}; // 0 original point sampling, 1 bilinear, 2 bicubic.
+  float denoise{}, detail{}; // Optional spatial noise reduction/detail, 0..1.
+  bool reconstruct_view() const {
+    return quality != 0 || sampling != 0 || denoise > 0 || detail > 0;
+  }
   void sanitize() {
     auto bound = [](float v, float lo, float hi, float fallback) {
       return std::isfinite(v) ? std::clamp(v, lo, hi) : fallback;
@@ -24,12 +29,16 @@ struct ImageSettings {
     sharpness = bound(sharpness, 0, 1, .5f);
     quality = std::clamp(quality, 0, 3);
     upscale = std::clamp(upscale, 0, 3);
+    sampling = std::clamp(sampling, 0, 2);
+    denoise = bound(denoise, 0, 1, 0);
+    detail = bound(detail, 0, 1, 0);
   }
   bool operator==(const ImageSettings &b) const {
     return exposure == b.exposure && contrast == b.contrast &&
            saturation == b.saturation && gamma == b.gamma && zoom == b.zoom &&
            pan_x == b.pan_x && pan_y == b.pan_y && sharpness == b.sharpness &&
-           quality == b.quality && upscale == b.upscale;
+           quality == b.quality && upscale == b.upscale &&
+           sampling == b.sampling && denoise == b.denoise && detail == b.detail;
   }
   bool operator!=(const ImageSettings &b) const { return !(*this == b); }
 };

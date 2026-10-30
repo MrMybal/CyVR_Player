@@ -77,6 +77,7 @@ void readable(VulkanContext &gpu, VkImage image) {
 }
 #include "ambilight_probe.hpp"
 #include "vr180_zoom_probe.hpp"
+#include "spatial_filter_probe.hpp"
 int main(int argc, char **argv) {
   try {
     if (argc != 2 && argc != 3)
@@ -91,7 +92,7 @@ int main(int argc, char **argv) {
     };
     VulkanRenderer renderer(gpu);
     renderer.initialize(VK_FORMAT_R8G8B8A8_SRGB, assets);
-    int checks = check_ambilight(gpu,renderer,assets)+check_vr180_zoom(gpu,renderer,assets);
+    int checks = check_ambilight(gpu,renderer,assets)+check_vr180_zoom(gpu,renderer,assets)+check_spatial_filters(gpu,renderer,assets);
     for (int stereo = 0; stereo < 3; ++stereo)
       for (int quality = 0; quality < 4; ++quality) {
         ImageSettings settings;

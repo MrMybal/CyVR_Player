@@ -593,8 +593,12 @@ struct VideoRenderer::Impl {
       processor_output = output;
       processor_quality = settings.quality;
     }
+    ImageSettings sourceControls;
+    sourceControls.sampling=settings.sampling;
+    sourceControls.denoise=settings.denoise;
+    sourceControls.detail=settings.detail;
     convert(processor->source_image(), input.width, input.height, lease, true,
-            ImageSettings{}, stereo, {}, [&](VkCommandBuffer command) {
+            sourceControls, stereo, {}, [&](VkCommandBuffer command) {
               processor->record(command, target, settings, stereo, sampled);
             });
   }
@@ -628,6 +632,9 @@ struct VideoRenderer::Impl {
     projectionControls.zoom = settings.zoom;
     projectionControls.pan_x = settings.pan_x;
     projectionControls.pan_y = settings.pan_y;
+    projectionControls.sampling = settings.sampling;
+    projectionControls.denoise = settings.denoise;
+    projectionControls.detail = settings.detail;
     auto corrections = settings;
     corrections.zoom = 1;
     corrections.pan_x = corrections.pan_y = 0;

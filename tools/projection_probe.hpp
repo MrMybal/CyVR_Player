@@ -26,7 +26,7 @@ class ProjectionProbe {
 
 public:
   ProjectionProbe(cyvr::VulkanContext &context, const cyvr::AssetReader &assets,
-                  VkImageView source)
+                  VkImageView source, VkFilter filter = VK_FILTER_LINEAR)
       : gpu(context) {
     using namespace cyvr;
     VkAttachmentDescription attachment{};
@@ -49,7 +49,7 @@ public:
     vkCheck(vkCreateRenderPass(gpu.device, &rp, nullptr, &pass),
             "projection probe pass");
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    si.magFilter = si.minFilter = filter;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW =
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

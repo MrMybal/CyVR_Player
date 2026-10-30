@@ -461,6 +461,12 @@ bool PlayerApplication::action(int id) {
   } else if (id >= 1320 && id <= 1323) {
     image.upscale = id - 1320;
     ++processing_request;
+  } else if (id >= 1350 && id <= 1352) {
+    image.sampling = id-1350;
+    ++processing_request;
+  } else if (id == 1353) {
+    image.sampling=0;image.denoise=0;image.detail=0;
+    ++processing_request;
   } else if (id == 1330) {
     image = ImageSettings{};
     ++processing_request;
@@ -644,7 +650,7 @@ bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
     }
     cinema.sanitize();ambilight.sanitize();state_dirty_=true;ui_.invalidate();return true;
   }
-  if (id >= 1340 && id <= 1347) {
+  if (id >= 1340 && id <= 1349) {
     if (phase == cyvr::SliderPhase::Cancel || !std::isfinite(fraction))
       return true;
     const float f = std::clamp(fraction, 0.f, 1.f);
@@ -672,6 +678,14 @@ bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
       break;
     case 1347:
       image.sharpness = f;
+      break;
+    case 1348:
+      image.denoise = f;
+      ++processing_request;
+      break;
+    case 1349:
+      image.detail = f;
+      ++processing_request;
       break;
     }
     image.sanitize();

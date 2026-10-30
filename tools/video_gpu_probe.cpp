@@ -16,10 +16,11 @@ int main(int argc, char **argv) {
     const unsigned minimum=argc>=7?unsigned(std::stoul(argv[6])):24;
     const bool controls = mode == "controls";
     ImageSettings settings;
-    settings.quality = mode == "cas"   ? 1
-                       : mode == "fsr" ? 2
-                       : mode == "gsr" ? 3
+    settings.quality = mode == "cas" || mode == "spatial-cas" ? 1
+                       : mode == "fsr" || mode == "spatial-fsr" ? 2
+                       : mode == "gsr" || mode == "spatial-gsr" ? 3
                                        : 0;
+    if(mode.rfind("spatial",0)==0){settings.sampling=2;settings.denoise=.5f;settings.detail=.6f;}
     VulkanContext gpu;
     loadVulkan();
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
