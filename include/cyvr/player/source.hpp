@@ -41,6 +41,7 @@ struct StreamOptions {
     // a PEM exported by SystemCertificates from the platform trust manager.
     std::string ca_file;
     std::vector<ContentKey> clear_keys;
+    int disc_title = -1, disc_angle = 0;
     void validate() const;
 };
 } // namespace cyvr::player

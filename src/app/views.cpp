@@ -187,6 +187,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                   : classify_extension(item.name) == FileKind::splat ? "SPLATS"
                   : classify_extension(item.name) == FileKind::subtitle ? "SUBTITLE"
                   : classify_extension(item.name) == FileKind::key ? "KEYS"
+                  : classify_extension(item.name) == FileKind::disc ? "DISC"
                                                                      : "VIDEO"),
                accent);
       d.text(195, y + 16, 24, fit(d, item.name, 1010), white);

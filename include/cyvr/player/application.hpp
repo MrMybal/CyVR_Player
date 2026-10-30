@@ -36,6 +36,7 @@ struct PlayerState {
   std::string status{"Choose a video."}, title, codec;
   std::vector<TrackInfo> tracks;
   std::vector<ChapterInfo> chapters;
+  DiscInfo disc;
   int video_track{-1},audio_track{-1},subtitle_track{-1};
   std::int64_t duration_us{}, position_us{}, seek_target_us{};
   bool seeking{};
@@ -58,6 +59,7 @@ public:
   std::uint64_t open(std::string location, std::string title, std::int64_t start_us = 0,
             bool autoplay = true, TrackSelection selection = {});
   bool select_track(TrackKind,int index);
+  bool select_disc_title(int index, int angle = 0);
   bool external_subtitle(std::string location);
   bool clearkey_file(std::string location);
   TrackSelection selection() const;

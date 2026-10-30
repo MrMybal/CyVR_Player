@@ -80,6 +80,8 @@ int main(int argc,char** argv){
             else if(arg=="--slice-length") slice_length=std::stoll(value());
             else if(arg=="--packets") packets_limit=std::stoi(value());
             else if(arg=="--seek-us") seek=std::stoll(value());
+            else if(arg=="--disc-title") options.disc_title=std::stoi(value());
+            else if(arg=="--disc-angle") options.disc_angle=std::stoi(value());
             else if(arg=="--timeout-ms"){options.open_timeout_ms=options.read_timeout_ms=std::stoi(value());}
             else if(arg=="--cancel-after-ms") cancel_ms=std::stoi(value());
             else if(arg=="--ca-file") options.ca_file=value();
@@ -168,14 +170,18 @@ int main(int argc,char** argv){
             if(comma) std::cout<<',';
             comma=true;
             std::cout<<"{\"index\":"<<track.index<<",\"type\":"<<json(track_name(track.kind))<<",\"codec\":"<<json(track.codec)
-                <<",\"width\":"<<track.width<<",\"height\":"<<track.height<<",\"nominal_fps\":"<<track.nominal_fps<<",\"sample_rate\":"<<track.sample_rate<<",\"channels\":"<<track.channels<<'}';
+                <<",\"language\":"<<json(track.language)<<",\"width\":"<<track.width<<",\"height\":"<<track.height<<",\"nominal_fps\":"<<track.nominal_fps<<",\"sample_rate\":"<<track.sample_rate<<",\"channels\":"<<track.channels<<'}';
         }
         std::cout<<"],\"packets\":"<<packets<<",\"eof\":"<<(eof?"true":"false")<<",\"decoded_video_frames\":"<<video_frames
             <<",\"decoded_audio_frames\":"<<audio_frames<<",\"decoded_audio_samples\":"<<audio_samples<<",\"first_video_pts_us\":";
         if(first_video_pts) std::cout<<*first_video_pts;else std::cout<<"null";
         std::cout<<",\"last_video_pts_us\":";
         if(last_video_pts) std::cout<<*last_video_pts;else std::cout<<"null";
-        std::cout<<"}\n";
+        const auto& disc=demuxer.disc();
+        std::cout<<",\"disc_type\":"<<json(disc.type)<<",\"disc_title\":"<<disc.selected<<",\"disc_angle\":"<<disc.angle<<",\"disc_titles\":[";
+        comma=false;for(const auto& t:disc.titles){if(comma)std::cout<<',';comma=true;std::cout<<"{\"index\":"<<t.index<<",\"duration_us\":"<<t.duration_us<<",\"chapters\":"<<t.chapters<<",\"angles\":"<<t.angles<<'}';}
+        std::cout<<"],\"chapters\":[";comma=false;for(const auto& c:demuxer.chapters()){if(comma)std::cout<<',';comma=true;std::cout<<"{\"start_us\":"<<c.start_us<<",\"end_us\":"<<c.end_us<<'}';}
+        std::cout<<"]}\n";
         return 0;
     } catch(const std::exception& error){
         std::cerr<<"{\"error\":"<<json(error.what())<<"}\n";

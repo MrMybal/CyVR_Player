@@ -1,6 +1,6 @@
 # CyVR Player
 
-A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.8-alpha.1**.
+A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.9-alpha.1**.
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model.
 
@@ -13,6 +13,8 @@ python tools/prepare_splats.py
 python tools/build_codecs.py
 python tools/build_subtitles.py --target windows
 python tools/build_subtitles.py --target android
+python tools/build_discs.py --target windows
+python tools/build_discs.py --target android
 python tools/build_ffmpeg_android.py
 python tools/build_app.py --target all
 python tools/build_app.py --target android --no-immersive
@@ -28,7 +30,7 @@ The final command builds an alternative 2D-only APK with `CYVR_ENABLE_IMMERSIVE=
 
 Both APK variants keep `com.cyvr.player` and the existing development signing key, so `adb install -r` preserves app files and grants. They replace one another. Android API 32 and Horizon OS v69 or later are required. These are development builds, not store release packages.
 
-For the Android Alpha package, run `python tools/prepare_splats.py`, `python tools/build_codecs.py`, `python tools/build_subtitles.py --target android`, `python tools/build_ffmpeg_android.py --alpha`, then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.8-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
+For the Android Alpha package, run `python tools/prepare_splats.py`, `python tools/build_codecs.py`, `python tools/build_subtitles.py --target android`, `python tools/build_discs.py --target android`, `python tools/build_ffmpeg_android.py --alpha`, then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.9-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
 
 Prerequisites are the existing Android SDK (NDK 27.2.12479018, CMake 3.22.1, Build Tools 35.0.1, platform 34), JDK, LLVM/Windows C++ SDK, and the sibling `../CyVR_UI` checkout. `ANDROID_HOME`, `JAVA_HOME` and `CXX` can override tool locations. `CYVR_UI_ROOT` is the corresponding CMake setting. The local foundation includes the small reusable GPU/lifecycle extension hooks described in [the integration notes](docs/interface.md); retain those local changes when updating it.
 
@@ -115,9 +117,21 @@ Text subtitles use **libass + FreeType + HarfBuzz + FriBidi**, including ASS/SSA
 
 HDR10/PQ and HLG are converted in Vulkan from BT.2020 to the SDR sRGB display path, before image corrections and reconstruction. The tone mapper uses available mastering peak metadata (default 1,000 nits). This is tone mapping to SDR, not native HDR panel output or Dolby Vision/HDR10+ dynamic-metadata processing.
 
+## DVD and Blu-ray ISO images
+
+Open a `.iso` or `.img` file in the library or through Android's document picker. The reader detects **DVD-Video** or **Blu-ray**, reads directly from the image without mounting or extracting it, and automatically selects the longest supported movie title. **Playback → Tracks → Disc titles** selects another title; a title change starts it at zero and preserves pause. Track changes within a title preserve the position. Title/angle choices, tracks and navigation survive activity replacement. Existing flat/curved cinema, hidden controls and image corrections remain available.
+
+DVD IFO program/cell order, chapter points, aspect ratio, audio/subpicture language mappings and subtitle palettes feed the existing playback pipeline. Blu-ray MPLS/CLPI playlists supply clip order, duration, chapters, angles and stream languages. Clip/cell timestamps become one continuous movie clock, including source timestamp resets between segments. Seeking aligns to disc access units; a leading partial audio frame is discarded after a seek. DVD MPEG-2 and Blu-ray AVC/HEVC use the existing hardware decoder/fallback selection.
+
+The pinned readers are **libdvdread 7.1.1** (GPL-2.0-or-later), **libbluray 1.5.0** and **libudfread 1.2.0** (LGPL-2.1-or-later). Their sources and notices accompany the Alpha. Both local files and seekable Android SAF descriptor slices work. HTTP(S) ISO URLs need a known image size and reliable byte-range support; this is random-access disc reading, not live transport streaming. Local ISO entries use a disc placeholder rather than starting an expensive background disc scan for each browser row.
+
+Interactive DVD/HDMV/BD-J menus, CSS/AACS/BD+ protected payloads, DVD-Audio, DVD-VR, arbitrary data-disc browsing and interleaved DVD angle/interactive program chains are not implemented. Unsupported images/titles report an error. Blu-ray 3D SSIF reconstruction is unavailable; the disc panel identifies its 2D base-view fallback. Codec, hardware and HDR limitations described elsewhere still apply, including to UHD images.
+
+For reproducible tests, use `python tools/make_disc_fixtures.py` with FFmpeg, Pillow, tsMuxeR 2.7.0, dvdauthor/spumux 0.7.2 and mkisofs. `--dvd-tools` and `--tsmuxer` select external authoring-tool paths; these tools are not application dependencies. The fixtures contain generated color patterns, tones and a bitmap caption. Run `python tests/disc_integration.py` after a Windows build; it checks complete decode, title/chapter selection, continuous timestamps, bitmap subtitles, SAF slices, HTTP ranges, state restoration and malformed image rejection.
+
 ## MVC, spatial video and encrypted files
 
-MVC/H.264 and two-view MV-HEVC are decoded in software, using the BSD edge264-mvc decoder and FFmpeg HEVC respectively. MVC works with interleaved Annex B/Matroska streams and MPEG-TS carrying its dependent view on a separate PID in the same program. Ambiguous programs with multiple base/dependent candidates are not automatically merged. MVC currently requires progressive 8-bit 4:2:0. MV-HEVC retains 8/10-bit samples and matches eye frames by presentation timestamp, using left/right metadata when available and view ID order otherwise. Output is full-width SBS; the application selects that layout automatically, and eye inversion remains available. Missing/unmatched eyes produce an error instead of displaying the base image in both eyes. This does not add Blu-ray ISO navigation, protected disc access or menus. Software decoding performance depends on dimensions, profile, frame rate and device CPU capacity.
+MVC/H.264 and two-view MV-HEVC are decoded in software, using the BSD edge264-mvc decoder and FFmpeg HEVC respectively. MVC works with interleaved Annex B/Matroska streams and MPEG-TS carrying its dependent view on a separate PID in the same program. Ambiguous programs with multiple base/dependent candidates are not automatically merged. MVC currently requires progressive 8-bit 4:2:0. MV-HEVC retains 8/10-bit samples and matches eye frames by presentation timestamp, using left/right metadata when available and view ID order otherwise. Output is full-width SBS; the application selects that layout automatically, and eye inversion remains available. Missing/unmatched eyes produce an error instead of displaying the base image in both eyes. Blu-ray 3D SSIF images currently play their 2D base view with an explicit notice. Software decoding performance depends on dimensions, profile, frame rate and device CPU capacity.
 
 For **CENC AES-128** content for which you have keys, select a standard ClearKey **JWK Set** file (`.jwk` or `.clearkey`) in the library after opening the video. **Playback → Tracks → Video tracks → Import ClearKey (JWK)** opens the library; **Remove ClearKey** removes the selection. The player reopens the current source using the supplied KID/key mapping. Up to 16 unique 16-byte KIDs/keys are accepted, in base64url, with strict size/structure validation. Local files and explicitly granted SAF documents work; keys are not fetched from arbitrary URLs. Only the selected file URI is checkpointed across hosts, and key bytes stay in process memory. The player does not acquire licenses, extract keys, or implement Widevine/PlayReady/FairPlay. Those systems need their provider's authorization and DRM integration, which this open-source native renderer does not supply. Existing HLS AES-128 support remains available through FFmpeg.
 

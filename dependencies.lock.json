@@ -169,6 +169,30 @@
       "archive": ".deps/downloads/edge264-mvc-4555276ce692ee8abdb8f768d4e59f82b1f6590e.tar.gz",
       "sha256": "fb0be4f9bb40f0598cfbd3aabc9faf352a5a59789ba8dbf20f40008b40b92f7d",
       "commit": "4555276ce692ee8abdb8f768d4e59f82b1f6590e"
+    },
+    {
+      "name": "libbluray source",
+      "version": "1.5.0",
+      "license": "LGPL-2.1-or-later",
+      "url": "https://download.videolan.org/pub/videolan/libbluray/1.5.0/libbluray-1.5.0.tar.xz",
+      "archive": ".deps/downloads/libbluray-1.5.0.tar.xz",
+      "sha256": "f676408e91a5d321abf8b8d4dfdae36205c297dab5c54c3ec519639025f474a2"
+    },
+    {
+      "name": "libudfread source",
+      "version": "1.2.0",
+      "license": "LGPL-2.1-or-later",
+      "url": "https://download.videolan.org/pub/videolan/libudfread/libudfread-1.2.0.tar.xz",
+      "archive": ".deps/downloads/libudfread-1.2.0.tar.xz",
+      "sha256": "bb477cbd4cfbfc7787d9d05b71ee5e70430f5cfebf1297497f7e83547958050f"
+    },
+    {
+      "name": "libdvdread source",
+      "version": "7.1.1",
+      "license": "GPL-2.0-or-later",
+      "url": "https://download.videolan.org/pub/videolan/libdvdread/7.1.1/libdvdread-7.1.1.tar.xz",
+      "archive": ".deps/downloads/libdvdread-7.1.1.tar.xz",
+      "sha256": "a0d47876548bec806774bbf8dbf20bb19ba139464383156b32eb8e59915b90a9"
     }
   ]
 }

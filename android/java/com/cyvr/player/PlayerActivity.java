@@ -106,7 +106,10 @@ public class PlayerActivity extends NativeActivity {
             ArrayList<String> flat=new ArrayList<>();
             for(DocumentBrowser.Entry e:listing.entries){
                 if(!e.directory && e.mimeType!=null && !e.mimeType.startsWith("video/") && !e.mimeType.contains("mpegurl")
-                        && !e.mimeType.contains("octet-stream"))continue;
+                        && !e.mimeType.contains("octet-stream") && !e.mimeType.contains("iso9660")
+                        && !e.mimeType.contains("cd-image") && !e.mimeType.contains("disk-image")
+                        && !e.name.toLowerCase(java.util.Locale.ROOT).endsWith(".iso")
+                        && !e.name.toLowerCase(java.util.Locale.ROOT).endsWith(".img"))continue;
                 flat.add(e.uri.toString());flat.add(e.name);flat.add(e.directory?"1":"0");flat.add(Long.toString(Math.max(0,e.size)));
             }
             return flat.toArray(new String[0]);

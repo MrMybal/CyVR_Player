@@ -193,11 +193,13 @@ int main() {
       state.display_tab = 2;
       state.tracks={3,5,8,"content://test/document/captions"};
       state.tracks.clearkey_file="content://test/document/keys.jwk";
+      state.tracks.disc_title=7;state.tracks.disc_angle=1;
       state.tracks_open=true;state.track_tab=2;state.track_offset=7;
       state.cinema={};state.cinema.environment=6;state.cinema.width=7.5f;state.cinema.curvature=75;state.cinema.distance=5;state.cinema.pitch=20;state.cinema.ambient=.15f;state.cinema_tab=2;state.ambilight.enabled=true;state.ambilight.intensity=1.4f;state.ambilight.smoothing=.75f;
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
+      if(!loaded || loaded->tracks.disc_title!=7 || loaded->tracks.disc_angle!=1)throw std::runtime_error("Disc selection lost during activity transfer");
       if(!loaded || loaded->cinema!=state.cinema || loaded->cinema_tab!=2 || loaded->ambilight!=state.ambilight)throw std::runtime_error("Cinema settings were not retained across activity replacement");
       if (!loaded || loaded->source != state.source ||
           loaded->position_us != 1234567 || loaded->playing ||

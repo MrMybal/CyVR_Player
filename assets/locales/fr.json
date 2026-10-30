@@ -189,5 +189,11 @@
   "Automatic format: decoded stereo views": "Format automatique : vues stéréo décodées",
   "Automatic format: video metadata": "Format automatique : métadonnées de la vidéo",
   "Automatic format: filename hints": "Format automatique : indications du nom de fichier",
-  "Automatic format: standard 2D": "Format automatique : vidéo 2D classique"
+  "Automatic format: standard 2D": "Format automatique : vidéo 2D classique",
+  "Disc titles": "Titres du disque",
+  "Chapter": "Chapitre",
+  "DISC": "DISQUE",
+  "Angle": "Angle",
+  "Movie titles; interactive disc menus are unavailable.": "Titres vidéo ; menus interactifs du disque indisponibles.",
+  "Blu-ray 3D SSIF is unavailable; playing the 2D base view.": "Blu-ray 3D SSIF indisponible : lecture de la vue 2D."
 }

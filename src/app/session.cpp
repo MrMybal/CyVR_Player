@@ -121,6 +121,7 @@ struct PlayerSession::Impl {
         Demuxer input;
         StreamOptions options;
         options.ca_file = platform.ca_file;
+        options.disc_title=active_selection.disc_title;options.disc_angle=active_selection.disc_angle;
         if(!active_selection.clearkey_file.empty()) {
           const auto& path=active_selection.clearkey_file;
           const auto key_source=path.rfind("content://",0)==0?platform.open_document(path):MediaSource::file(path);
@@ -160,6 +161,7 @@ struct PlayerSession::Impl {
         const auto &parameters = *input.codec_parameters(video);
         publish([&](PlayerState &s) {
           s.tracks = input.tracks();
+          s.disc=input.disc();
           s.chapters=input.chapters();s.video_track=video;s.position_us=input.seekable()?start_us:0;
           s.audio_track=active_selection.audio==-1?-1:valid_track(active_selection.audio,TrackKind::audio)?active_selection.audio:input.best_audio_stream();
           s.subtitle_track=-1;
@@ -670,6 +672,23 @@ bool PlayerSession::select_track(TrackKind kind,int index){
   else if(kind==TrackKind::subtitle){choice.subtitle=index;choice.external_subtitle.clear();}
   else return false;
   impl_->requested_start=impl_->state.seeking?impl_->state.seek_target_us:impl_->state.position_us;
+  impl_->requested_autoplay=impl_->state.playing;
+  impl_->cancellation->cancel();impl_->open_pending=true;impl_->stop_pending=false;
+#ifdef __ANDROID__
+  if(impl_->audio)impl_->audio->pause(true);impl_->frames.clear();impl_->clock_started=false;
+#endif
+  impl_->wake.notify_all();return true;
+}
+bool PlayerSession::select_disc_title(int index,int angle){
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if(!impl_->state.ready || !impl_->state.seekable || impl_->open_pending || angle<0)return false;
+  const auto& disc=impl_->state.disc;
+  const auto it=std::find_if(disc.titles.begin(),disc.titles.end(),[&](const auto& t){return t.index==index;});
+  if(it==disc.titles.end() || unsigned(angle)>=it->angles)return false;
+  const bool same=index==disc.selected;
+  auto& choice=impl_->requested_selection;choice.disc_title=index;choice.disc_angle=angle;
+  if(!same){choice.video=choice.audio=choice.subtitle=-2;choice.external_subtitle.clear();}
+  impl_->requested_start=same?impl_->state.position_us:0;
   impl_->requested_autoplay=impl_->state.playing;
   impl_->cancellation->cancel();impl_->open_pending=true;impl_->stop_pending=false;
 #ifdef __ANDROID__

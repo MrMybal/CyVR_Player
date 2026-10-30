@@ -1,5 +1,6 @@
 #pragma once
 #include "cyvr/player/source.hpp"
+#include "cyvr/player/disc.hpp"
 #include "cyvr/player/video_layout.hpp"
 #include <optional>
 #include <stdexcept>
@@ -61,6 +62,7 @@ public:
     // program. -1 means absent or ambiguous; never merge unrelated programs.
     int mvc_dependent_stream(int base_stream) const;
     const std::vector<ChapterInfo>& chapters() const;
+    const DiscInfo& disc() const;
     std::vector<FontAttachment> fonts() const;
 private:
     struct Impl;

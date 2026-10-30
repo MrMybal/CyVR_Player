@@ -207,7 +207,7 @@ void PlayerApplication::open(std::string location, std::string title) {
   if (std::none_of(playlist_.begin(),playlist_.end(),[&](const auto& item){return item.location==location;})) {
     playlist_.clear();
     if (std::any_of(entries_.begin(),entries_.end(),[&](const auto& item){return item.location==location;}))
-      for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat))playlist_.push_back(item);
+      for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat || classify_extension(item.name)==FileKind::disc))playlist_.push_back(item);
   }
   controls_.compact(controls_now());
   if (title.empty())
@@ -267,7 +267,7 @@ void PlayerApplication::tick() {
       entries_ = browser_->entries;
       browse_status_ = browser_->status;
       if(playlist_.empty() && std::any_of(entries_.begin(),entries_.end(),[&](const auto& item){return item.location==source_;}))
-        for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat))playlist_.push_back(item);
+        for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat || classify_extension(item.name)==FileKind::disc))playlist_.push_back(item);
       if (browse_status_ != "Reading folder...")
         offset_ = std::min(offset_, entries_.empty()
                                         ? 0

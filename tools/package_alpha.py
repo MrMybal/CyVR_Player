@@ -47,7 +47,7 @@ def main():
     lock = json.loads((ROOT / 'dependencies.lock.json').read_text(encoding='utf-8'))
     dependencies = []
     for entry in lock['external_dependencies']:
-        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49','SplatKit Vulkan source','VulkanMemoryAllocator source','dav1d source','edge264-mvc source'} and not entry['name'].startswith('Subtitle source: '):
+        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49','SplatKit Vulkan source','VulkanMemoryAllocator source','dav1d source','edge264-mvc source','libbluray source','libudfread source','libdvdread source'} and not entry['name'].startswith('Subtitle source: '):
             continue
         source = ROOT / entry['archive']
         data = source.read_bytes()
@@ -55,7 +55,7 @@ def main():
             raise RuntimeError('Dependency archive checksum mismatch: ' + source.name)
         files['dependencies/' + source.name] = data
         dependencies.append(entry['name'])
-    if len(dependencies) != 11:
+    if len(dependencies) != 14:
         raise RuntimeError('Expected media, BSD codec, subtitle, Gaussian and OpenXR source archives')
     files['build-config/ffmpeg-alpha.json'] = (ROOT / '.deps/ffmpeg/android-arm64-alpha/origin.json').read_bytes()
     metadata = {
@@ -99,6 +99,7 @@ Build tools and the Android platform/runtime are installed separately.
 4. In `CyVR_Player`, run `python tools/prepare_splats.py`,
    `python tools/build_codecs.py`,
    `python tools/build_subtitles.py --target android`, then
+   `python tools/build_discs.py --target android`, then
    `python tools/build_ffmpeg_android.py --alpha`.
    The script builds Mbed TLS and FFmpeg in separate Alpha directories. It maps
    compiler file paths and substitutes portable variables in the generated

@@ -15,14 +15,15 @@ void PlayerApplication::draw_tracks(cyvr::DrawList& d){
   const auto white=Color::hex(light?0x142b35:0xf0f5f6),muted=Color::hex(light?0x48616b:0xa7b7bf);
   d.text(36,184,32,tr("Tracks, subtitles and chapters"),white);
   button(d,1401,{1176,181,228,52},"Back to playback");
-  const char* tabs[]={"Video tracks","Audio tracks","Subtitles","Chapters"};
-  for(int n=0;n<4;++n)button(d,1410+n,{36.f+n*344,252,330,52},tabs[n],track_tab_==n);
+  const char* tabs[]={"Video tracks","Audio tracks","Subtitles","Chapters","Disc titles"};
+  for(int n=0;n<5;++n)button(d,1410+n,{36.f+n*275,252,263,52},tabs[n],track_tab_==n);
   auto media=session_.state();const auto tracks=filtered(media,track_tab_);
-  const auto total=track_tab_==3?int(media.chapters.size()):int(tracks.size());
+  const auto total=track_tab_==4?int(media.disc.titles.size()):track_tab_==3?int(media.chapters.size()):int(tracks.size());
   track_offset_=std::min(track_offset_,total?((total-1)/7)*7:0);
   for(int row=0;row<7 && track_offset_+row<total;++row){
     const auto index=track_offset_+row;std::string label;bool selected=false;
-    if(track_tab_==3){const auto& c=media.chapters[index];label=std::to_string(index+1)+". "+c.title+"  ("+std::to_string(c.start_us/60000000)+":"+(c.start_us/1000000%60<10?"0":"")+std::to_string(c.start_us/1000000%60)+")";}
+    if(track_tab_==4){const auto& t=media.disc.titles[index];label=media.disc.type+"  #"+std::to_string(t.index+1)+"  "+t.name+"  "+std::to_string(t.duration_us/60000000)+":"+(t.duration_us/1000000%60<10?"0":"")+std::to_string(t.duration_us/1000000%60)+"  /  "+std::to_string(t.chapters)+" "+std::string(tr("Chapters"));selected=t.index==media.disc.selected;}
+    else if(track_tab_==3){const auto& c=media.chapters[index];label=std::to_string(index+1)+". "+(c.title.empty()?std::string(tr("Chapter")):c.title)+"  ("+std::to_string(c.start_us/60000000)+":"+(c.start_us/1000000%60<10?"0":"")+std::to_string(c.start_us/1000000%60)+")";}
     else{
       const auto& t=*tracks[index];label="#"+std::to_string(t.index)+"  "+t.codec+"  "+t.language+"  "+t.title;
       if(t.width>0)label+="  "+std::to_string(t.width)+"x"+std::to_string(t.height);
@@ -45,6 +46,12 @@ void PlayerApplication::draw_tracks(cyvr::DrawList& d){
     button(d,1435,{480,790,300,52},"Remove ClearKey",false,!session_.selection().clearkey_file.empty());
     if(!session_.selection().clearkey_file.empty())d.text(36,866,22,tr("ClearKey file selected"),white);
   }
+  if(track_tab_==4 && media.disc.selected>=0){
+    const auto it=std::find_if(media.disc.titles.begin(),media.disc.titles.end(),[&](const auto& t){return t.index==media.disc.selected;});
+    if(it!=media.disc.titles.end() && it->angles>1)button(d,1436,{36,790,430,52},std::string(tr("Angle"))+" "+std::to_string(media.disc.angle+1)+" / "+std::to_string(it->angles),false,media.ready);
+    d.text(36,866,20,tr("Movie titles; interactive disc menus are unavailable."),muted);
+    if(!media.disc.note.empty())d.text(36,903,20,tr(media.disc.note),Color::hex(0xf2c683));
+  }
   button(d,1430,{1008,790,190,52},"Previous",false,track_offset_>0);
   button(d,1431,{1212,790,192,52},"Next",false,track_offset_+7<total);
   const auto external=session_.selection().external_subtitle;
@@ -56,16 +63,18 @@ void PlayerApplication::draw_tracks(cyvr::DrawList& d){
 bool PlayerApplication::track_action(int id){
   if(id==1400){tracks_open_=true;controls_.expand(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());}
   else if(id==1401)tracks_open_=false;
-  else if(id>=1410 && id<=1413){track_tab_=id-1410;track_offset_=0;}
+  else if(id>=1410 && id<=1414){track_tab_=id-1410;track_offset_=0;}
   else if(id==1430)track_offset_=std::max(0,track_offset_-7);
   else if(id==1431)track_offset_+=7;
   else if(id==1433){tracks_open_=false;page_=0;ui_.page=cyvr::Page(0);ui_.setToast(std::string(tr("Choose a subtitle file in the library.")));}
   else if(id==1434){tracks_open_=false;page_=0;ui_.page=cyvr::Page(0);ui_.setToast(std::string(tr("Choose a .jwk file in the library.")));}
   else if(id==1435)session_.clearkey_file({});
+  else if(id==1436){const auto media=session_.state();const auto it=std::find_if(media.disc.titles.begin(),media.disc.titles.end(),[&](const auto& t){return t.index==media.disc.selected;});if(it!=media.disc.titles.end())session_.select_disc_title(it->index,(media.disc.angle+1)%int(it->angles));}
   else if(id==1432 || (id>=1420 && id<1427)){
     const auto state=session_.state();const auto tracks=filtered(state,track_tab_);const int index=track_offset_+id-1420;
     bool accepted=false;
-    if(track_tab_==3 && id!=1432 && index>=0 && index<int(state.chapters.size())){session_.seek(state.chapters[index].start_us);accepted=state.seekable;}
+    if(track_tab_==4 && id!=1432 && index>=0 && index<int(state.disc.titles.size()))accepted=session_.select_disc_title(state.disc.titles[index].index);
+    else if(track_tab_==3 && id!=1432 && index>=0 && index<int(state.chapters.size())){session_.seek(state.chapters[index].start_us);accepted=state.seekable;}
     else if(track_tab_<3 && (id==1432 || (index>=0 && index<int(tracks.size())))){
       const TrackKind kinds[]={TrackKind::video,TrackKind::audio,TrackKind::subtitle};
       accepted=session_.select_track(kinds[track_tab_],id==1432?-1:tracks[index]->index);

@@ -3,6 +3,7 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/ac3_parser.h>
 #include <libavutil/error.h>
 #include <libavutil/opt.h>
 #include <libavutil/stereo3d.h>
@@ -15,6 +16,9 @@ extern "C" {
 #include <cctype>
 #include <limits>
 #include <mutex>
+#include <map>
+#include <set>
+#include <cstring>
 #include <filesystem>
 #ifdef _WIN32
 #include <io.h>
@@ -62,6 +66,12 @@ void FrameDeleter::operator()(AVFrame* frame) const noexcept { av_frame_free(&fr
 struct Demuxer::Impl {
     AVFormatContext* format=nullptr;
     AVIOContext* io=nullptr;
+    AVIOContext* disc_stream=nullptr;
+    AVIOContext* disc_image=nullptr;
+    std::unique_ptr<DiscImage> disc;
+    DiscInfo no_disc;
+    std::map<int,std::int64_t> disc_packet_positions;
+    std::set<int> disc_audio_sync;
     std::shared_ptr<Cancellation> cancel;
     std::int64_t deadline=0;
     StreamOptions options;
@@ -74,6 +84,9 @@ struct Demuxer::Impl {
     bool fd_seekable=false;
     ~Impl(){
         avformat_close_input(&format);
+        if(disc_stream){av_freep(&disc_stream->buffer);avio_context_free(&disc_stream);}
+        disc.reset();
+        if(disc_image)avio_closep(&disc_image);
         if(io){ av_freep(&io->buffer); avio_context_free(&io); }
         if(fd>=0){
 #ifdef _WIN32
@@ -92,6 +105,7 @@ struct Demuxer::Impl {
         if(result>=0) return;
         if(cancel->cancelled()) throw MediaError(std::string(operation)+": cancelled");
         if(deadline && now_ns()>=deadline) throw MediaError(std::string(operation)+": timed out");
+        if(result==AVERROR(EACCES) && disc)throw MediaError("DVD: CSS protected payload; use an unencrypted disc image");
         fail(operation,result);
     }
     AVStream* stream(int index) const {
@@ -168,6 +182,39 @@ struct Demuxer::Impl {
         format->pb=io;
         format->flags|=AVFMT_FLAG_CUSTOM_IO;
     }
+    static int read_disc(void* opaque,std::uint8_t* bytes,int count){
+        auto& self=*static_cast<Impl*>(opaque);if(interrupt(opaque))return AVERROR_EXIT;
+        return self.disc->read(bytes,count);
+    }
+    static std::int64_t seek_disc(void* opaque,std::int64_t offset,int whence){
+        auto& self=*static_cast<Impl*>(opaque);if(interrupt(opaque))return AVERROR_EXIT;
+        return self.disc->seek(offset,whence);
+    }
+    void attach_disc(AVIOContext* image){
+        disc=DiscImage::open(image,options.disc_title,options.disc_angle);
+        auto* buffer=static_cast<unsigned char*>(av_malloc(65536));if(!buffer)throw std::bad_alloc();
+        disc_stream=avio_alloc_context(buffer,65536,0,this,read_disc,nullptr,seek_disc);
+        if(!disc_stream){av_free(buffer);throw std::bad_alloc();}
+        disc_stream->seekable=AVIO_SEEKABLE_NORMAL;
+        format->pb=disc_stream;format->flags|=AVFMT_FLAG_CUSTOM_IO;
+    }
+    void normalize_disc(AVPacket* packet){
+        if(!disc)return;
+        auto& pos=disc_packet_positions[packet->stream_index];if(packet->pos>=0)pos=packet->pos;
+        const auto delta=av_rescale_q(disc->timestamp_delta(pos),AVRational{1,90000},stream(packet->stream_index)->time_base);
+        if(packet->pts!=AV_NOPTS_VALUE)packet->pts+=delta;
+        if(packet->dts!=AV_NOPTS_VALUE)packet->dts+=delta;
+    }
+    bool audio_aligned(const AVPacket* packet){
+        if(!disc_audio_sync.count(packet->stream_index))return true;
+        const auto codec=stream(packet->stream_index)->codecpar->codec_id;
+        const auto* b=packet->data;const int n=packet->size;bool valid=true;
+        if(codec==AV_CODEC_ID_AC3 || codec==AV_CODEC_ID_EAC3){std::uint8_t id{};std::uint16_t bytes{};valid=n>=7 && av_ac3_parse_header(b,std::size_t(n),&id,&bytes)==0 && n>=bytes;}
+        else if(codec==AV_CODEC_ID_MP2 || codec==AV_CODEC_ID_MP3)valid=n>=4 && b[0]==255 && (b[1]&0xe0)==0xe0 && (b[1]&6)!=0;
+        else if(codec==AV_CODEC_ID_DTS)valid=n>=4 && ((!std::memcmp(b,"\x7f\xfe\x80\x01",4)) || (!std::memcmp(b,"\xfe\x7f\x01\x80",4)) || (!std::memcmp(b,"\x1f\xff\xe8\x00",4)) || (!std::memcmp(b,"\xff\x1f\x00\xe8",4)));
+        if(valid)disc_audio_sync.erase(packet->stream_index);
+        return valid;
+    }
 };
 
 Demuxer::Demuxer()=default;
@@ -212,7 +259,28 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         : source.location;
     const char* location=source.kind==SourceKind::descriptor ? nullptr : location_text.c_str();
     const AVInputFormat* hint=nullptr;
-    if(source.kind==SourceKind::file){
+    auto candidate=source.location.substr(0,source.location.find_first_of("?#"));
+    auto ext=std::filesystem::u8path(candidate).extension().u8string();
+    std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
+    bool disc_image=ext==".iso" || ext==".img";
+    if(source.kind==SourceKind::descriptor && next->fd_seekable){
+        std::array<unsigned char,2048> sector{};
+        if(avio_seek(next->io,16*2048,SEEK_SET)>=0 && avio_read(next->io,sector.data(),int(sector.size()))==int(sector.size()))
+            disc_image=!std::memcmp(sector.data()+1,"CD001",5) || !std::memcmp(sector.data()+1,"BEA01",5);
+        next->check(int(std::min<std::int64_t>(INT_MAX,avio_seek(next->io,0,SEEK_SET))),"Rewind document probe");
+    }
+    if(disc_image){
+        if(source.kind==SourceKind::descriptor)next->attach_disc(next->io);
+        else{
+            next->check(avio_open2(&next->disc_image,location_text.c_str(),AVIO_FLAG_READ,&next->format->interrupt_callback,&settings.value),"Open disc image");
+            next->attach_disc(next->disc_image);
+        }
+        location=nullptr;hint=av_find_input_format(next->disc->demuxer());
+        // Playlist/cell metadata supplies duration; seeking to the raw end of
+        // every VOB/M2TS merely to estimate it is expensive and misleading.
+        next->format->skip_estimate_duration_from_pts=1;
+    }
+    if(source.kind==SourceKind::file && !disc_image){
         auto extension=std::filesystem::u8path(source.location).extension().u8string();
         std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return char(std::tolower(c));});
         if(extension==".264" || extension==".h264")hint=av_find_input_format("h264");
@@ -229,6 +297,13 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         if(mvc){next->format->flags|=AVFMT_FLAG_NOPARSE|AVFMT_FLAG_NOFILLIN;transport_mvc=true;}
     }
     next->check(avformat_find_stream_info(next->format,nullptr),"Probe media");
+    if(next->disc){
+        next->format->start_time=0;next->format->duration=next->disc->duration_us();
+        for(unsigned i=0;i<next->format->nb_streams;++i){
+            auto* stream=next->format->streams[i];next->disc->configure_subtitle(stream->codecpar);next->disc->configure_video(stream->codecpar);
+            const auto language=next->disc->language(stream->id);if(!language.empty())av_dict_set(&stream->metadata,"language",language.c_str(),0);
+        }
+    }
     if(transport_mvc && next->format->start_time==AV_NOPTS_VALUE){
         next->prefetched.reset(av_packet_alloc());if(!next->prefetched)throw std::bad_alloc();
         const int result=av_read_frame(next->format,next->prefetched.get());
@@ -252,6 +327,7 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         if(stream->duration!=AV_NOPTS_VALUE) track.duration_us=av_rescale_q(stream->duration,stream->time_base,microseconds);
         if(track.kind==TrackKind::video){
             auto& hints=track.layout;
+            if(next->disc){hints.stereo=0;hints.projection=0;hints.half=false;hints.swap=false;}
             // Container StereoMode / st3d and spherical sv3d metadata are
             // exposed by FFmpeg as codec-parameter side data after probing.
             if(const auto* data=av_packet_side_data_get(p->coded_side_data,p->nb_coded_side_data,AV_PKT_DATA_STEREO3D);data && data->size>=sizeof(AVStereo3D)){
@@ -290,10 +366,12 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         const auto* c=next->format->chapters[i];
         next->chapters.push_back({av_rescale_q(c->start,c->time_base,microseconds),av_rescale_q(c->end,c->time_base,microseconds),tag(c->metadata,"title")});
     }
+    if(next->disc){next->chapters.clear();for(const auto& c:next->disc->chapters())next->chapters.push_back({c.start_us,c.end_us,c.name});}
     impl_=std::move(next);
     for(auto& track:impl_->tracks)if(track.kind==TrackKind::video){const int dependent=mvc_dependent_stream(track.index);if(dependent>=0)impl_->tracks[std::size_t(dependent)].companion_video=track.index;}
 }
 const std::vector<ChapterInfo>& Demuxer::chapters() const {if(!impl_)throw std::logic_error("Media is closed");return impl_->chapters;}
+const DiscInfo& Demuxer::disc()const{if(!impl_)throw std::logic_error("Media is closed");return impl_->disc?impl_->disc->info():impl_->no_disc;}
 std::vector<FontAttachment> Demuxer::fonts() const {
     if(!impl_)throw std::logic_error("Media is closed");
     std::vector<FontAttachment> result;std::size_t total=0;
@@ -328,7 +406,8 @@ bool Demuxer::seekable() const {
 PacketRead Demuxer::read(){
     if(!impl_) throw std::logic_error("Media is closed");
     if(impl_->cancel->cancelled()) throw MediaError("Read media: cancelled");
-    if(impl_->prefetched)return {ReadStatus::packet,std::move(impl_->prefetched)};
+    if(impl_->prefetched){impl_->normalize_disc(impl_->prefetched.get());return {ReadStatus::packet,std::move(impl_->prefetched)};}
+    for(int attempt=0;attempt<4096;++attempt){
     PacketPtr packet(av_packet_alloc());
     if(!packet) throw std::bad_alloc();
     impl_->arm(impl_->options.read_timeout_ms);
@@ -336,7 +415,13 @@ PacketRead Demuxer::read(){
     if(result==AVERROR_EOF) return {ReadStatus::end,{}};
     if(result==AVERROR(EAGAIN)) return {ReadStatus::again,{}};
     impl_->check(result,"Read media");
+    impl_->normalize_disc(packet.get());
+    // A DVD VOBU can begin with the tail of an audio frame from the previous
+    // VOBU. After a seek, discard that leading fragment before decoding.
+    if(!impl_->audio_aligned(packet.get()))continue;
     return {ReadStatus::packet,std::move(packet)};
+    }
+    throw MediaError("Disc audio could not resynchronize after seeking");
 }
 std::int64_t Demuxer::origin_us() const {
     if(!impl_) throw std::logic_error("Media is closed");
@@ -349,6 +434,14 @@ void Demuxer::seek(std::int64_t position){
     if(position<0 || (origin>0 && position>INT64_MAX-origin)) throw std::invalid_argument("Invalid seek timestamp");
     if(!seekable()) throw MediaError("This source does not support seeking");
     impl_->arm(impl_->options.open_timeout_ms);
+    if(impl_->disc){
+        const auto target=impl_->disc->seek_time(position);
+        // Drop the old AVIO bytes before synchronizing the logical stream.
+        auto* io=impl_->disc_stream;io->buf_ptr=io->buf_end=io->buffer;io->pos=target;io->eof_reached=0;io->error=0;
+        avformat_flush(impl_->format);impl_->prefetched.reset();impl_->disc_packet_positions.clear();
+        impl_->disc_audio_sync.clear();for(const auto& t:impl_->tracks)if(t.kind==TrackKind::audio)impl_->disc_audio_sync.insert(t.index);
+        return;
+    }
     impl_->check(avformat_seek_file(impl_->format,-1,INT64_MIN,origin+position,origin+position,0),"Seek media");
     impl_->prefetched.reset();
 }

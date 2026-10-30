@@ -70,6 +70,8 @@ def notices(destination):
             ('VMA-MIT.txt',ROOT/'.deps/vma/source/LICENSE.txt')]:
         if not source.is_file():raise RuntimeError('Missing dependency license: '+name)
         shutil.copyfile(source,destination/name)
+    for name in ('libbluray','libdvdread','libudfread'):
+        shutil.copyfile(ROOT/'.deps/discs/source/subprojects'/name/'COPYING',destination/(name+'-COPYING.txt'))
     for name,source in [('dav1d-BSD-2-Clause.txt',ROOT/'.deps/dav1d/source/COPYING'),
                         ('edge264-mvc-BSD-3-Clause.txt',ROOT/'.deps/edge264/source/LICENSE_BSD.txt')]:
         shutil.copyfile(source,destination/name)

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:metavr="http://schemas.meta.com/metavr-sdk" package="com.cyvr.player" android:versionCode="14" android:versionName="0.4.8-alpha.1" android:installLocation="auto">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:metavr="http://schemas.meta.com/metavr-sdk" package="com.cyvr.player" android:versionCode="15" android:versionName="0.4.9-alpha.1" android:installLocation="auto">
     <uses-sdk android:minSdkVersion="32" android:targetSdkVersion="34" />
     <metavr:uses-metavr-sdk metavr:minSdkVersion="69" metavr:targetSdkVersion="207" />
     <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="false" />
@@ -13,6 +13,7 @@
             <layout android:defaultWidth="1280dp" android:defaultHeight="880dp" android:minWidth="720dp" android:minHeight="495dp" />
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.LAUNCHER" /><category android:name="com.oculus.intent.category.2D" /><category android:name="com.oculus.intent.category.VR_HOME_LAUNCHER" /><category android:name="com.oculus.intent.category.OVERLAY_LAUNCHER" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:mimeType="video/*" /><data android:scheme="content" /><data android:scheme="https" /><data android:scheme="http" /><data android:scheme="rtsp" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="content" /><data android:mimeType="application/x-iso9660-image" /><data android:mimeType="application/x-cd-image" /><data android:mimeType="application/x-disk-image" /></intent-filter>
         </activity>
         <activity-alias android:name="com.cyvr.player.PlayerActivity" android:targetActivity="com.cyvr.player.PanelActivity" android:exported="true">
             <meta-data android:name="android.app.lib_name" android:value="cyvr_player" />

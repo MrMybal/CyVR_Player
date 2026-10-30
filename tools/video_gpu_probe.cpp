@@ -80,6 +80,7 @@ int main(int argc, char **argv) {
     bool multiview=false,audio_started=false;
     std::vector<std::int64_t> av_offset;
     VideoMetrics metrics;
+    std::string decoder_name;
     std::optional<android::AudioPlaybackStats> audio_metrics;
     {
       VideoRenderer video(gpu, VK_FORMAT_R8G8B8A8_SRGB, assets);
@@ -89,6 +90,7 @@ int main(int argc, char **argv) {
       while (std::chrono::steady_clock::now() - start <
              std::chrono::seconds(15)) {
         const auto state = session.state();
+        if(!state.codec.empty())decoder_name=state.codec;
         multiview|=state.multiview;
         if (!state.ready && state.status != "Choose a video." &&
             state.status != "Opening media...")
@@ -154,6 +156,7 @@ int main(int argc, char **argv) {
     const auto high=av_offset.empty()?0:av_offset[std::min(av_offset.size()-1,av_offset.size()*19/20)];
     std::cout << "{\"presented_frames\":" << presented
               << ",\"nonblack_pixels\":" << nonblack
+              << ",\"decoder\":\"" << decoder_name << "\""
               << ",\"stereo\":" << (multiview?"true":"false")
               << ",\"audio_started\":" << (audio_started?"true":"false")
               << ",\"decoded_frames\":" << metrics.decoded << ",\"late_drops\":" << metrics.dropped
