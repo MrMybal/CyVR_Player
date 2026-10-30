@@ -30,7 +30,9 @@ void PlayerApplication::draw_tracks(cyvr::DrawList& d){
       if(t.default_track)label+="  ["+std::string(tr("Default"))+"]";
       if(t.forced)label+="  ["+std::string(tr("Forced"))+"]";
       if(t.hearing_impaired)label+="  [SDH]";
+      if(t.companion_video>=0)label+="  [MVC]";
       selected=t.index==(track_tab_==0?media.video_track:track_tab_==1?media.audio_track:media.subtitle_track) && (track_tab_!=2 || session_.selection().external_subtitle.empty());
+      if(track_tab_==0 && t.companion_video==media.video_track && t.companion_video>=0)selected=true;
     }
     while(!label.empty() && d.textWidth(23,label)>1290){auto n=label.size()-1;while(n>0 && (static_cast<unsigned char>(label[n])&0xc0)==0x80)--n;label.resize(n);}
     button(d,1420+row,{36,325.f+row*64,1368,54},label,selected,media.ready);
@@ -38,6 +40,11 @@ void PlayerApplication::draw_tracks(cyvr::DrawList& d){
   if(!total)d.text(50,365,24,tr("No tracks in this category."),muted);
   if(track_tab_==1 || track_tab_==2)button(d,1432,{36,790,220,52},"Disabled",track_tab_==1?media.audio_track<0:media.subtitle_track<0 && session_.selection().external_subtitle.empty(),media.ready);
   if(track_tab_==2)button(d,1433,{270,790,530,52},"Choose external subtitles",false,media.ready);
+  if(track_tab_==0){
+    button(d,1434,{36,790,430,52},"Import ClearKey (JWK)");
+    button(d,1435,{480,790,300,52},"Remove ClearKey",false,!session_.selection().clearkey_file.empty());
+    if(!session_.selection().clearkey_file.empty())d.text(36,866,22,tr("ClearKey file selected"),white);
+  }
   button(d,1430,{1008,790,190,52},"Previous",false,track_offset_>0);
   button(d,1431,{1212,790,192,52},"Next",false,track_offset_+7<total);
   const auto external=session_.selection().external_subtitle;
@@ -53,6 +60,8 @@ bool PlayerApplication::track_action(int id){
   else if(id==1430)track_offset_=std::max(0,track_offset_-7);
   else if(id==1431)track_offset_+=7;
   else if(id==1433){tracks_open_=false;page_=0;ui_.page=cyvr::Page(0);ui_.setToast(std::string(tr("Choose a subtitle file in the library.")));}
+  else if(id==1434){tracks_open_=false;page_=0;ui_.page=cyvr::Page(0);ui_.setToast(std::string(tr("Choose a .jwk file in the library.")));}
+  else if(id==1435)session_.clearkey_file({});
   else if(id==1432 || (id>=1420 && id<1427)){
     const auto state=session_.state();const auto tracks=filtered(state,track_tab_);const int index=track_offset_+id-1420;
     bool accepted=false;

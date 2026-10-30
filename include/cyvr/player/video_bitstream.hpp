@@ -7,6 +7,7 @@ struct VideoConfiguration {
     std::string mime;
     int width=0,height=0;
     VideoColor color;
+    bool multiview{};
     // Android csd-0, csd-1... AVC: SPS/PPS separate; HEVC: VPS/SPS/PPS combined.
     std::vector<std::vector<std::uint8_t>> codec_data;
 };

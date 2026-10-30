@@ -237,6 +237,7 @@ void PlayerApplication::tick() {
   const bool was_ready=state_.ready;
   auto state = session_.state();
   if (state.revision != state_.revision) {
+    if(state.multiview && !state_.multiview){stereo=1;half_stereo=false;state_dirty_=true;}
     // Position changes alone are checkpointed every five seconds. Avoid
     // synchronous state-file writes twice a second on the rendering thread.
     if (state.ready != state_.ready || state.playing != state_.playing ||
@@ -375,6 +376,9 @@ bool PlayerApplication::action(int id) {
     if (item.directory) {
       parents_.push_back(directory_);
       browse(item.location);
+    } else if(classify_extension(item.name)==FileKind::key){
+      if(session_.clearkey_file(item.location)){page_=1;ui_.page=cyvr::Page(1);tracks_open_=true;track_tab_=0;controls_.expand(controls_now());}
+      else ui_.setToast(std::string(tr("Open a video before choosing a ClearKey file.")));
     } else if(classify_extension(item.name)==FileKind::subtitle){
       if(session_.external_subtitle(item.location)){page_=1;ui_.page=cyvr::Page(1);tracks_open_=true;track_tab_=2;controls_.expand(controls_now());}
       else ui_.setToast(std::string(tr("Open a seekable video before choosing subtitles.")));

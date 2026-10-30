@@ -1,3 +1,25 @@
+# Current validation — 0.4.6 (30 October 2026)
+
+- Windows: nine CTest suites pass. New cases cover timestamp-matched stereo pairs, explicit eye metadata, 8/10-bit samples, seek isolation and malformed/duplicate JWK rejection. Existing 174 GPU processing cases, state migration, placement and controls remain covered.
+- Integration: original AV1 8/10-bit clips decode all 48 frames; four pinned synthetic MVC structural vectors cover both views, inverted NAL order, inter-view prediction and display ordering. A generated two-PID MPEG-TS fixture retains both distinct eyes. CENC AES-128 with a generated test JWK reproduces the clear video's exact decoded luma hash; missing/wrong keys do not. Multi-track MKV/ASS/PGS tests and all sixteen existing desktop file/stream cases pass.
+- Immersive controls: both controller pointers use real ray/panel intersections through press, held frames and release to expand/collapse the player UI. The shared host now restricts dock captures to its actual widget range, retaining player buttons and sliders on the main panel.
+- Android: immersive/default and strictly 2D Alpha variants compile. ARM64, 16 KiB ELF/ZIP alignment, manifest/default host, non-debuggable packaging and required license notices are checked.
+- Quest 3: headless ARM64 AV1, MVC, two-PID MVC, two MV-HEVC reference clips and CENC decoded hashes match PC for both eyes. The real PlayerSession → AHardwareBuffer → Vulkan path presents the small AV1 8/10-bit fixtures without late drops, and MVC/MV-HEVC use stereo output. AAudio starts for clear and encrypted AVC; the small fixture's video PTS is within approximately 0–2 ms of the AAudio presentation-clock estimate at dequeue (p05/p95 across samples). This excludes physical speaker/display latency. Software pause/seek/resume changes generation and preserves pause behavior.
+- Audio: normalized surround mixing with 1 dB headroom, unchanged stereo gain and sample-continuous MKV timing are checked against FFmpeg references. Generated stereo 44.1 kHz, AAC 5.1, FLAC 7.1 and deliberately chunked MKV fixtures cover native PCM conversion and hardware/software video playback. All nine final Quest playback cases report zero missing PCM, timestamp gaps, expired samples, safety clipping, invalid samples and AAudio underruns. The movie output uses the normal AAudio media path, with burst-sized buffering and adaptive growth; video follows the actual audio presentation clock. The corrected APK is installed and its restored HEVC/PQ source starts with clean audio counters. Listening acceptance remains required.
+- The complete MKV probe also runs on Quest: two video, two audio and two subtitle tracks, font attachments, ASS layout, subtitle gaps/rewind, PGS cache/clear, chapters, paused track switching and real Vulkan alpha blending.
+- All 174 image GPU cases pass on the Adreno, including PQ/HLG reference colors, eye isolation and all filters. Gaussian parsing, GPU visibility/radix sorting, stereo camera translation, four quality modes and sequence seek/control tests pass on Quest.
+
+Synthetic Gaussian timing, on one offscreen target per eye at 1920 × 1920, after warm-up:
+
+| Scene | Stereo samples per mode | Native mean/p95 | CAS mean/p95 | FSR mean/p95 | GSR mean/p95 |
+| --- | --- | --- | --- | --- | --- |
+| 100,000 splats | 60 | 10.28 / 11.72 ms | 10.91 / 12.06 ms | 20.55 / 21.97 ms | 11.52 / 12.71 ms |
+| 1,000,000 splats | 120 | 45.99 / 46.09 ms | 45.28 / 45.72 ms | 54.32 / 54.88 ms | 46.15 / 46.43 ms |
+
+Timing measures CPU command submission plus GPU completion waits for both eyes, excluding uploads during warm-up, UI and the Quest compositor. Full-resolution processing is retained. The million-splat case exceeds a 72 Hz frame budget. Source density, overlap, spherical harmonics and animation can change these results substantially; these short synthetic runs do not establish sustained thermals or application/compositor FPS. Worn-headset visual comfort, actual audible synchronization and physical controller gestures still require human validation.
+
+## Previous validation records
+
 # 0.4.5-alpha.1 validation — 2026-10-30
 
 New local checks cover PQ/HLG transfer/tone mapping in 40 real Vulkan cases (174 image cases total), container track changes preserving pause/time, two video/two audio/two subtitle tracks in an original MKV fixture, SRT and styled/animated ASS, embedded fonts and chapters, PGS palette/alpha/display clearing, and Vulkan subtitle alpha overlay. Sixteen existing file/descriptor/HTTP/HLS/DASH/TLS/cancellation integration cases pass on the Windows FFmpeg SDK. Android DASH is not enabled by that desktop result.

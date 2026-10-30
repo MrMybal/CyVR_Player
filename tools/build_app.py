@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
+from foundation_sources import sources as foundation_sources
 
 ROOT=Path(__file__).resolve().parents[1]
 UI=Path(os.environ.get('CYVR_UI_ROOT',ROOT.parent/'CyVR_UI')).resolve()
@@ -19,11 +20,12 @@ BUILD_TOOLS=SDK/'build-tools/35.0.1'
 ANDROID_JAR=SDK/'platforms/android-34/android.jar'
 def run(*args):subprocess.run([str(a) for a in args],check=True,cwd=ROOT)
 def configure(target,immersive=True,alpha=False):
+    foundation=foundation_sources(UI)
     if target=='android':
         media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if alpha else 'android-arm64')
         origin=media/'origin.json'
         flags=json.loads(origin.read_text()).get('configure',[]) if origin.exists() else []
-        if not all(flag in flags for flag in ('--enable-decoders','--enable-demuxers','--enable-zlib')):
+        if not all(flag in flags for flag in ('--enable-decoders','--enable-demuxers','--enable-zlib','--enable-libdav1d')):
             raise RuntimeError('Rebuild the expanded Android codec profile first: python tools/build_ffmpeg_android.py'+(' --alpha' if alpha else ''))
     directory=ROOT/'build'/('app-'+target+('-panel' if target=='android' and not immersive else '')+('-alpha' if alpha else ''))
     common=[CMAKE,'-S',ROOT,'-B',directory,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={NINJA}',
@@ -46,6 +48,9 @@ def configure(target,immersive=True,alpha=False):
         rc=sorted((Path(os.environ['ProgramFiles(x86)'])/'Windows Kits/10/bin').glob('*/x64/rc.exe'))[-1]
         common += [f'-DCMAKE_CXX_COMPILER:FILEPATH={clang.as_posix()}',f'-DCMAKE_C_COMPILER:FILEPATH={clang.with_name("clang.exe").as_posix()}',f'-DCMAKE_RC_COMPILER:FILEPATH={rc.as_posix()}']
     run(*common);run(CMAKE,'--build',directory,'--parallel','8')
+    if foundation_sources(UI)!=foundation:
+        raise RuntimeError('The local foundation changed during compilation; rebuild to capture one consistent source snapshot')
+    (directory/'foundation-inputs.json').write_text(json.dumps(foundation,indent=2)+'\n',encoding='utf-8')
     return directory
 def notices(destination):
     destination.mkdir(parents=True,exist_ok=True)
@@ -64,6 +69,9 @@ def notices(destination):
             ('SplatKit-THIRD_PARTY.txt',ROOT/'.deps/splatkit/source/THIRD_PARTY_LICENSES.txt'),
             ('VMA-MIT.txt',ROOT/'.deps/vma/source/LICENSE.txt')]:
         if not source.is_file():raise RuntimeError('Missing dependency license: '+name)
+        shutil.copyfile(source,destination/name)
+    for name,source in [('dav1d-BSD-2-Clause.txt',ROOT/'.deps/dav1d/source/COPYING'),
+                        ('edge264-mvc-BSD-3-Clause.txt',ROOT/'.deps/edge264/source/LICENSE_BSD.txt')]:
         shutil.copyfile(source,destination/name)
     for folder in [ROOT/'third_party',ROOT/'.deps/ffmpeg/android-arm64/licenses',ROOT/'.deps/ffmpeg/windows/licenses',UI/'third_party',UI/'assets/fonts']:
         if folder.exists():

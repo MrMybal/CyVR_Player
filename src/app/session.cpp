@@ -1,4 +1,5 @@
 #include "cyvr/player/application.hpp"
+#include "cyvr/player/clearkey.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -49,6 +50,9 @@ struct PlayerSession::Impl {
   int audio_stream{-1};
   PacketPtr audio_pending;
   bool audio_eos{};
+  std::deque<PacketPtr> video_lookahead;
+  std::size_t lookahead_bytes{};
+  bool demux_end{};
   unsigned presented{}, dropped{};
 #endif
   explicit Impl(Platform p) : platform(std::move(p)) {
@@ -113,14 +117,27 @@ struct PlayerSession::Impl {
       }
       try {
         if(classify_extension(std::filesystem::u8path(name))==FileKind::splat || classify_extension(std::filesystem::u8path(target))==FileKind::splat){play_splats(target,cancel,start_us);continue;}
+        Demuxer input;
+        StreamOptions options;
+        options.ca_file = platform.ca_file;
+        if(!active_selection.clearkey_file.empty()) {
+          const auto& path=active_selection.clearkey_file;
+          const auto key_source=path.rfind("content://",0)==0?platform.open_document(path):MediaSource::file(path);
+          try{options.clear_keys=read_clear_keys(key_source,*cancel);}catch(...){
+#ifdef __ANDROID__
+            if(key_source.kind==SourceKind::descriptor)::close(key_source.fd);
+#endif
+            throw;
+          }
+#ifdef __ANDROID__
+          if(key_source.kind==SourceKind::descriptor)::close(key_source.fd);
+#endif
+        }
         MediaSource source = target.rfind("content://", 0) == 0
                                  ? platform.open_document(target)
                              : target.find("://") != std::string::npos
                                  ? MediaSource::network(target)
                                  : MediaSource::file(target);
-        Demuxer input;
-        StreamOptions options;
-        options.ca_file = platform.ca_file;
         try {
           input.open(source, options, cancel);
         } catch (...) {
@@ -135,7 +152,8 @@ struct PlayerSession::Impl {
           ::close(source.fd);
 #endif
         const auto valid_track=[&](int index,TrackKind kind){return std::any_of(input.tracks().begin(),input.tracks().end(),[&](const auto& t){return t.index==index && t.kind==kind && !t.attached_picture;});};
-        const int video = valid_track(active_selection.video,TrackKind::video)?active_selection.video:input.best_video_stream();
+        int video = valid_track(active_selection.video,TrackKind::video)?active_selection.video:input.best_video_stream();
+        for(const auto& t:input.tracks())if(t.index==video && t.companion_video>=0)video=t.companion_video;
         if (video < 0)
           throw MediaError("This media has no video track.");
         const auto &parameters = *input.codec_parameters(video);
@@ -237,6 +255,7 @@ struct PlayerSession::Impl {
     if(next>=0){try{output=std::make_shared<android::AudioPlayback>(input,next,start_us);}catch(const std::exception& e){publish([&](PlayerState& s){s.audio_status=e.what();s.audio_track=-1;});next=-1;}}
     std::lock_guard<std::mutex> lock(mutex);
     audio=std::move(output);audio_stream=next;audio_pending.reset();audio_eos=false;
+    video_lookahead.clear();lookahead_bytes=0;demux_end=false;
   }
   void begin_subtitles(Demuxer& input,const std::shared_ptr<Cancellation>& cancel){
     try{load_subtitles(input,cancel);}catch(const std::exception& e){subtitle_decoder.reset();subtitle_stream=-1;{std::lock_guard<std::mutex> lock(mutex);subtitle_timeline.reset();}publish([&](PlayerState& s){s.subtitle_status=e.what();s.subtitle_track=-1;});}
@@ -263,7 +282,8 @@ struct PlayerSession::Impl {
     subtitle_stream=next;
     std::lock_guard<std::mutex> lock(mutex);subtitle_timeline=std::move(timeline);
   }
-  PacketRead read_video_packet(Demuxer& input){
+  PacketRead read_demux_packet(Demuxer& input){
+    if(demux_end)return {ReadStatus::end,{}};
     if(audio){
       pump_audio();
       if(audio_pending){if(!send_audio(audio_pending.get())){
@@ -285,11 +305,37 @@ struct PlayerSession::Impl {
       if(!send_audio(nullptr))return {ReadStatus::again,{}};
       audio_eos=true;
     }
+    if(packet.status==ReadStatus::end)demux_end=true;
     if(packet.status==ReadStatus::packet && audio && packet.packet->stream_index==audio_stream){
       if(!send_audio(packet.packet.get()))audio_pending=std::move(packet.packet);
       return {ReadStatus::again,{}};
     }
     return packet;
+  }
+  PacketRead read_video_packet(Demuxer& input){
+    if(video_lookahead.empty())return read_demux_packet(input);
+    auto packet=std::move(video_lookahead.front());video_lookahead.pop_front();lookahead_bytes-=std::size_t(packet->size);
+    return {ReadStatus::packet,std::move(packet)};
+  }
+  void prefetch_audio(Demuxer& input,int video,int dependent=-1){
+    // Decoded image leases remain bounded at three. Read ahead compressed packets
+    // so a full video queue cannot starve an interleaved audio chunk.
+    constexpr std::size_t budget=64*1024*1024;
+    for(unsigned n=0;audio && !demux_end && audio->buffered_us()<250000 && n<64;++n){
+      if(lookahead_bytes>=budget || video_lookahead.size()>=2048){
+        audio_failure(MediaError("Audio interleaving exceeds the playback buffer"));return;
+      }
+      auto packet=read_demux_packet(input);
+      if(packet.status==ReadStatus::end)return;
+      if(packet.status==ReadStatus::packet && (packet.packet->stream_index==video || packet.packet->stream_index==dependent)){
+        if(packet.packet->size<0 || std::size_t(packet.packet->size)>budget-lookahead_bytes){
+          audio_failure(MediaError("Compressed video exceeds the audio lookahead budget"));
+          // Keep the packet in order for video-only recovery.
+        }
+        lookahead_bytes+=std::size_t(std::max(0,packet.packet->size));video_lookahead.push_back(std::move(packet.packet));
+      }
+      if(audio_pending)return;
+    }
   }
   void audio_failure(const std::exception& e){
     std::lock_guard<std::mutex> lock(mutex);if(audio)audio->pause(true);audio.reset();audio_stream=-1;clock_started=false;state.audio_track=-1;state.audio_status=e.what();++state.revision;
@@ -297,14 +343,15 @@ struct PlayerSession::Impl {
   void pump_audio(){if(audio)try{audio->pump();}catch(const std::exception& e){audio_failure(e);}}
   bool send_audio(const AVPacket* packet){if(!audio)return true;try{return audio->send(packet);}catch(const std::exception& e){audio_failure(e);return true;}}
   void play_software(Demuxer& input,int video,const std::shared_ptr<Cancellation>& cancel,
-                     std::int64_t start_us,VideoColor color,std::deque<PacketPtr> startup={}){
+                     std::int64_t start_us,VideoColor color,std::deque<PacketPtr> startup={},bool multiview=false){
     bool first=true;
     while(!cancel->cancelled()){
       if(!first || !audio)begin_audio(input,start_us);
       if(!first)begin_subtitles(input,cancel);
       first=false;
       const auto epoch=++epoch_counter;
-      android::SoftwareVideo decoder(input,video,color,epoch,start_us);
+      android::SoftwareVideo decoder(input,video,color,epoch,start_us,multiview);
+      const int dependent=multiview?input.mvc_dependent_stream(video):-1;
       publish([&](PlayerState& s){s.ready=true;s.playing=!paused&&!pause_after_first;s.ended=false;s.codec=std::string("FFmpeg / ")+avcodec_get_name(input.codec_parameters(video)->codec_id);s.status="Software decoding fallback";});
       __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","DECODER_READY software %s",avcodec_get_name(input.codec_parameters(video)->codec_id));
       PacketPtr pending;bool end=false,eos=false,restart=false;
@@ -315,8 +362,10 @@ struct PlayerSession::Impl {
         {
           std::unique_lock<std::mutex> lock(mutex);
           if(seek_pending>=0){start_us=seek_pending;seek_pending=-1;frames.clear();if(audio)audio->pause(true);lock.unlock();input.seek(start_us);startup.clear();restart=true;break;}
-          if(paused || frames.size()>=3){wake.wait_for(lock,std::chrono::milliseconds(3));continue;}
+          if(paused){wake.wait_for(lock,std::chrono::milliseconds(3));continue;}
         }
+        prefetch_audio(input,video,dependent);
+        {std::unique_lock<std::mutex> lock(mutex);if(frames.size()>=3){wake.wait_for(lock,std::chrono::milliseconds(3));continue;}}
         bool progress=false;
         auto frame=decoder.receive();
         if(frame){
@@ -327,6 +376,7 @@ struct PlayerSession::Impl {
             std::lock_guard<std::mutex> lock(mutex);
             if(cancel->cancelled() || seek_pending>=0)continue;
             if(state.width!=int(desc.width) || state.height!=int(desc.height)){state.width=int(desc.width);state.height=int(desc.height);++state.revision;}
+            if(state.multiview!=decoder.stereo()){state.multiview=decoder.stereo();++state.revision;}
             ++counters.decoded;decoded_rate.add(performance_now());frames.push_back(std::move(frame));
           }
         }
@@ -334,7 +384,7 @@ struct PlayerSession::Impl {
           auto packet=startup.empty()?read_video_packet(input):PacketRead{ReadStatus::packet,std::move(startup.front())};
           if(!startup.empty())startup.pop_front();
           end=packet.status==ReadStatus::end;
-          if(packet.status==ReadStatus::packet && packet.packet->stream_index==video)pending=std::move(packet.packet);
+          if(packet.status==ReadStatus::packet && (packet.packet->stream_index==video || packet.packet->stream_index==dependent))pending=std::move(packet.packet);
           progress|=packet.status!=ReadStatus::again;
         }
         if(pending && decoder.send(pending.get())){pending.reset();progress=true;}
@@ -363,11 +413,18 @@ struct PlayerSession::Impl {
       begin_subtitles(input,cancel);
       VideoBitstream bits(input, video);
       std::deque<PacketPtr> primed;
-      if (!bits.configuration_ready()) {
+      std::deque<PacketPtr> original_startup;
+      std::size_t original_bytes{};
+      auto retain_startup=[&](PacketPtr packet){
+        if(packet->size<0 || std::size_t(packet->size)>8*1024*1024-original_bytes || original_startup.size()>=256)
+          throw MediaError("Compressed video startup exceeds its packet budget");
+        original_bytes+=std::size_t(packet->size);original_startup.push_back(std::move(packet));
+      };
+      if (!bits.configuration_ready() || bits.configuration().mime=="video/avc" || bits.configuration().mime=="video/hevc") {
         const auto deadline = Clock::now() + std::chrono::seconds(5);
         std::size_t bytes = 0, packet_count = 0;
         PacketPtr incoming;
-        while (!bits.configuration_ready()) {
+        while (!bits.configuration_ready() || primed.empty()) {
           if (cancel->cancelled())
             return;
           if (Clock::now() > deadline || bytes > 8 * 1024 * 1024 ||
@@ -391,21 +448,25 @@ struct PlayerSession::Impl {
             if (packet.status == ReadStatus::packet &&
                 packet.packet->stream_index == video)
               incoming = std::move(packet.packet);
+            else if(packet.status==ReadStatus::packet && packet.packet->stream_index==input.mvc_dependent_stream(video))retain_startup(std::move(packet.packet));
           }
-          if (incoming && bits.send(incoming.get()))
-            incoming.reset();
+          if (incoming && bits.send(incoming.get()))retain_startup(std::move(incoming));
         }
       }
       const auto &config = bits.configuration();
+      if(config.multiview || input.mvc_dependent_stream(video)>=0){
+        play_software(input,video,cancel,discard_before,config.color,std::move(original_startup),true);return;
+      }
       const auto name = config.mime.empty() ? std::string{} :
           platform.hardware_codec(config.mime, config.width, config.height);
       if (name.empty()){
-        play_software(input,video,cancel,discard_before,config.color,std::move(primed));return;
+        play_software(input,video,cancel,discard_before,config.color,std::move(original_startup));return;
       }
       auto format = android::make_video_format(config);
       android::SurfaceDecoder decoder;
       try{decoder.open(name.c_str(), format.get(), epoch, 6);}
-      catch(const std::exception&){play_software(input,video,cancel,discard_before,config.color,std::move(primed));return;}
+      catch(const std::exception&){play_software(input,video,cancel,discard_before,config.color,std::move(original_startup));return;}
+      original_startup.clear();
       __android_log_print(ANDROID_LOG_INFO, "CyVRPlayer",
                           "DECODER_READY %s %dx%d transfer=%d standard=%d peak_nits=%.0f", name.c_str(), config.width,
                           config.height,config.color.transfer,config.color.standard,config.color.peak_nits);
@@ -445,11 +506,13 @@ struct PlayerSession::Impl {
             restart = true;
             break;
           }
-          if (paused || frames.size() >= 3) {
+          if (paused) {
             wake.wait_for(lock, std::chrono::milliseconds(3));
             continue;
           }
         }
+        prefetch_audio(input,video);
+        {std::unique_lock<std::mutex> lock(mutex);if(frames.size()>=3){wake.wait_for(lock,std::chrono::milliseconds(3));continue;}}
         auto image = decoder.try_acquire_next();
         if (image) {
           image.pts_us -= 1'000'000;
@@ -579,6 +642,16 @@ struct PlayerSession::Impl {
   std::uint64_t presented_epoch{};
 #endif
 };
+#ifdef __ANDROID__
+std::optional<std::int64_t> PlayerSession::audio_position_us()const{
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if(!impl_->audio || !impl_->audio->started())return {};
+  return impl_->audio->position_us();
+}
+std::optional<android::AudioPlaybackStats> PlayerSession::audio_metrics()const{
+  std::lock_guard<std::mutex> lock(impl_->mutex);if(!impl_->audio)return {};return impl_->audio->stats();
+}
+#endif
 PlayerSession::PlayerSession(Platform p)
     : impl_(std::make_unique<Impl>(std::move(p))) {}
 PlayerSession::~PlayerSession() = default;
@@ -589,6 +662,7 @@ bool PlayerSession::select_track(TrackKind kind,int index){
   if(!impl_->state.ready || !impl_->state.seekable || impl_->open_pending)return false;
   if(index<0 && (index!=-1 || kind==TrackKind::video))return false;
   if(index>=0 && std::none_of(impl_->state.tracks.begin(),impl_->state.tracks.end(),[&](const auto& t){return t.index==index && t.kind==kind && !t.attached_picture;}))return false;
+  if(kind==TrackKind::video)for(const auto& t:impl_->state.tracks)if(t.index==index && t.companion_video>=0){index=t.companion_video;break;}
   auto& choice=impl_->requested_selection;
   if(kind==TrackKind::video)choice.video=index;
   else if(kind==TrackKind::audio)choice.audio=index;
@@ -608,6 +682,19 @@ bool PlayerSession::external_subtitle(std::string path){
   impl_->requested_selection.external_subtitle=std::move(path);
   impl_->requested_selection.subtitle=-1;
   impl_->requested_start=impl_->state.position_us;impl_->requested_autoplay=impl_->state.playing;
+  impl_->cancellation->cancel();impl_->open_pending=true;impl_->stop_pending=false;
+#ifdef __ANDROID__
+  if(impl_->audio)impl_->audio->pause(true);impl_->frames.clear();impl_->clock_started=false;
+#endif
+  impl_->wake.notify_all();return true;
+}
+bool PlayerSession::clearkey_file(std::string path){
+  if(!path.empty() && path.find("://")!=std::string::npos && path.rfind("content://",0)!=0)return false;
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if(impl_->location.empty() || impl_->open_pending)return false;
+  impl_->requested_selection.clearkey_file=std::move(path);
+  impl_->requested_start=impl_->state.position_us;
+  if(impl_->state.ready)impl_->requested_autoplay=impl_->state.playing;
   impl_->cancellation->cancel();impl_->open_pending=true;impl_->stop_pending=false;
 #ifdef __ANDROID__
   if(impl_->audio)impl_->audio->pause(true);impl_->frames.clear();impl_->clock_started=false;
@@ -735,7 +822,10 @@ android::ImageLease PlayerSession::take_frame() {
     impl_->clock_started = true;
     impl_->presented_epoch = first.epoch;
   }
-  if(impl_->audio && !impl_->pause_after_first)impl_->audio->start();
+  if(impl_->audio && !impl_->pause_after_first){
+    impl_->audio->start();
+    if(!impl_->audio->started()){impl_->wake.notify_all();return {};}
+  }
   const auto due = impl_->audio && impl_->audio->started() ? impl_->audio->position_us() :
       impl_->pts_base + std::chrono::duration_cast<std::chrono::microseconds>(
                             now - impl_->clock_base)

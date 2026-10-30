@@ -38,6 +38,7 @@ def main():
         for required in ['classes.dex','assets/video.vert.spv','assets/video.frag.spv','assets/video_filter.frag.spv',
                 'assets/font_atlas.bin','assets/hand_studio.bin','assets/ui.vert.spv','assets/ui.frag.spv',
                 'assets/subtitle-font.ttf','assets/licenses/libass-ISC.txt','assets/licenses/FriBidi-LGPLv2.1.txt',
+                'assets/licenses/dav1d-BSD-2-Clause.txt','assets/licenses/edge264-mvc-BSD-3-Clause.txt',
                 'assets/licenses/FreeType-FTL.txt','assets/licenses/HarfBuzz-MIT.txt','assets/licenses/SplatKit-MIT.txt','assets/licenses/VMA-MIT.txt',
                 'assets/glass.frag.spv','assets/environment.vert.spv','assets/environment.frag.spv',
                 'assets/spatial.vert.spv','assets/spatial.frag.spv',

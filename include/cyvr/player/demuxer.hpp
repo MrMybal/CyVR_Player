@@ -18,6 +18,7 @@ struct TrackInfo {
     std::optional<std::int64_t> duration_us;
     double nominal_fps{};
     bool default_track{}, forced{}, attached_picture{}, hearing_impaired{}, visual_impaired{};
+    int companion_video{-1};
 };
 struct ChapterInfo { std::int64_t start_us{}, end_us{}; std::string title; };
 struct FontAttachment { std::string name; std::vector<std::uint8_t> data; };
@@ -54,6 +55,9 @@ public:
     std::int64_t origin_us() const;
     int best_video_stream() const;
     int best_audio_stream() const;
+    // MPEG-TS can carry the MVC dependent view on a separate PID in the same
+    // program. -1 means absent or ambiguous; never merge unrelated programs.
+    int mvc_dependent_stream(int base_stream) const;
     const std::vector<ChapterInfo>& chapters() const;
     std::vector<FontAttachment> fonts() const;
 private:
@@ -68,7 +72,7 @@ struct FrameRead { DecodeStatus status; FramePtr frame; };
 class SoftwareDecoder {
 public:
     SoftwareDecoder(const Demuxer& demuxer, int stream, int threads = 2,
-                    std::int64_t max_pixels = 64 * 1024 * 1024);
+                    std::int64_t max_pixels = 64 * 1024 * 1024, bool decode_views = false);
     ~SoftwareDecoder();
     SoftwareDecoder(const SoftwareDecoder&) = delete;
     SoftwareDecoder& operator=(const SoftwareDecoder&) = delete;

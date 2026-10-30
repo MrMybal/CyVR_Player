@@ -227,11 +227,13 @@ public:
     }
   }
   bool beforeRender(UiModel &ui, double) override {
-    if (reportedHidden_ != int(ui.interfaceHidden)) {
+    if (reportedHidden_ != int(ui.interfaceHidden) || reportedCompact_ != int(ui.compactInterface)) {
       reportedHidden_ = int(ui.interfaceHidden);
+      reportedCompact_ = int(ui.compactInterface);
       __android_log_print(ANDROID_LOG_INFO, "CyVRPlayer",
                           "INTERFACE hidden=%d host=%s", reportedHidden_,
                           immersive_ ? "immersive" : "panel");
+      __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","INTERFACE mode=%s",ui.interfaceHidden?"hidden":ui.compactInterface?"compact":"full");
     }
     auto app = application_();
     if (!app || !gpu_)
@@ -966,6 +968,7 @@ private:
   }
 #endif
   int reportedHidden_{-1};
+  int reportedCompact_{-1};
   void destroyVideo() {
 #if CYVR_ENABLE_IMMERSIVE
     destroy_enhanced();

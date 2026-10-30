@@ -59,6 +59,19 @@ def main():
         prefix=ROOT/('.deps/ffmpeg/android-arm64'+suffix)
         toolbin=ndk/"toolchains/llvm/prebuilt/windows-x86_64/bin"
         compiler=posix(toolbin/"clang.exe")
+        dav1d=ROOT/'.deps/dav1d/android'
+        if not (dav1d/'lib/libdav1d.a').is_file():
+            raise RuntimeError('Build the BSD decoders first: python tools/build_codecs.py')
+        # This cross build has one pkg-config dependency. Query only that pinned
+        # target prefix; never allow host libraries to enter the Android link.
+        pkg=build/'pkg-config.sh'
+        pkg.write_text('#!/bin/sh\ncase "$*" in\n'+
+            '  --version) echo 0.29.2 ;;\n'+
+            '  *dav1d*) case "$*" in\n'+
+            '    *--modversion*) echo 1.5.4 ;;\n'+
+            '    *--cflags*) echo "-I'+posix(dav1d)+'/include" ;;\n'+
+            '    *--libs*) echo "-L'+posix(dav1d)+'/lib -ldav1d -lm" ;;\n'+
+            '    *) exit 0 ;;\n  esac ;;\n  *) exit 1 ;;\nesac\n',encoding='utf-8',newline='\n')
         host_compiler=Path(os.environ.get("CYVR_HOST_CC",r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang.exe"))
         host_wrapper=build/"host-cc.sh"
         host_wrapper.write_text("#!/bin/sh\nexec "+shlex.quote(posix(host_compiler))+" -fuse-ld=lld \"$@\"\n",encoding="utf-8",newline="\n")
@@ -70,10 +83,11 @@ def main():
             "--disable-avdevice","--disable-avfilter","--enable-network","--enable-mbedtls","--enable-zlib",
             "--enable-protocol=file,http,https,tcp,tls,udp,rtp,crypto",
             "--enable-demuxers","--enable-parsers","--enable-decoders","--enable-bsfs",
+            "--enable-libdav1d",
             f"--cc={compiler}",f"--ld={compiler}",f"--ar={posix(toolbin/'llvm-ar.exe')}",
             f"--host-cc=sh {posix(host_wrapper)}",
             f"--nm={posix(toolbin/'llvm-nm.exe')}",f"--ranlib={posix(toolbin/'llvm-ranlib.exe')}",
-            f"--strip={posix(toolbin/'llvm-strip.exe')}","--pkg-config=false",
+            f"--strip={posix(toolbin/'llvm-strip.exe')}",f"--pkg-config=sh {posix(pkg)}",
             f"--extra-cflags=--target=aarch64-linux-android29 -I{posix(tls_prefix)}/include"+(' '+maps if args.alpha else ''),
             f"--extra-ldflags=--target=aarch64-linux-android29 -L{posix(tls_prefix)}/lib -Wl,-z,max-page-size=16384"]
         bash=Path(os.environ.get("CYVR_BASH",r"C:\Program Files\Git\usr\bin\bash.exe"))
@@ -99,7 +113,7 @@ def main():
         prefix.mkdir(parents=True,exist_ok=True)
         (prefix/"origin.json").write_text(json.dumps({"ffmpeg_commit":"611cec792aa54e2e53dbc1be95dcf5955d9a99ba",
             "configure":[portable(f) for f in flags] if args.alpha else flags,"profile":"alpha" if args.alpha else "development",
-            "ndk":ndk.name,"mbedtls":"3.6.7","license":"LGPL-3.0-or-later"},indent=2)+"\n")
+            "ndk":ndk.name,"mbedtls":"3.6.7","dav1d":"1.5.4","license":"LGPL-3.0-or-later"},indent=2)+"\n")
         for name in ("COPYING.LGPLv3","COPYING.GPLv3","LICENSE.md"):
             (prefix/name).write_bytes((source/name).read_bytes())
     print("Android FFmpeg libraries:",prefix,flush=True)

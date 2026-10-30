@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
+from foundation_sources import sources as foundation_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 UI = Path(os.environ.get('CYVR_UI_ROOT', ROOT.parent / 'CyVR_UI')).resolve()
@@ -29,8 +30,11 @@ def main():
         if raw_path:
             path = raw_path.decode('utf-8')
             files['CyVR_Player/' + path] = git(ROOT, 'show', ':' + path)
-    ui_paths = set(filter(None, git(UI, 'ls-files', '-z').decode('utf-8').split('\0')))
-    ui_paths.update({'include/cyvr/android_render.hpp', 'include/cyvr/android_xr.hpp'})
+    foundation=foundation_sources(UI)
+    compiled=json.loads((ROOT/'build/app-android-alpha/foundation-inputs.json').read_text(encoding='utf-8'))
+    if foundation!=compiled:
+        raise RuntimeError('The foundation source differs from the compiled APK; rebuild before packaging')
+    ui_paths=set(foundation['files'])
     for path in sorted(ui_paths):
         parts = PurePosixPath(path).parts
         if parts[:2] in {('assets', 'branding'), ('docs', 'images')}:
@@ -43,7 +47,7 @@ def main():
     lock = json.loads((ROOT / 'dependencies.lock.json').read_text(encoding='utf-8'))
     dependencies = []
     for entry in lock['external_dependencies']:
-        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49','SplatKit Vulkan source','VulkanMemoryAllocator source'} and not entry['name'].startswith('Subtitle source: '):
+        if entry['name'] not in {'FFmpeg source for Android', 'Mbed TLS 3.6.7', 'OpenXR SDK source matching Android loader 1.1.49','SplatKit Vulkan source','VulkanMemoryAllocator source','dav1d source','edge264-mvc source'} and not entry['name'].startswith('Subtitle source: '):
             continue
         source = ROOT / entry['archive']
         data = source.read_bytes()
@@ -51,13 +55,13 @@ def main():
             raise RuntimeError('Dependency archive checksum mismatch: ' + source.name)
         files['dependencies/' + source.name] = data
         dependencies.append(entry['name'])
-    if len(dependencies) != 9:
-        raise RuntimeError('Expected media, subtitle, Gaussian and OpenXR source archives')
+    if len(dependencies) != 11:
+        raise RuntimeError('Expected media, BSD codec, subtitle, Gaussian and OpenXR source archives')
     files['build-config/ffmpeg-alpha.json'] = (ROOT / '.deps/ffmpeg/android-arm64-alpha/origin.json').read_bytes()
     metadata = {
         'version': version,
         'player_tree': player_tree,
-        'ui_base_commit': git(UI, 'rev-parse', 'HEAD').decode().strip(),
+        'ui_base_commit': foundation['base_commit'],
         'ui_license': 'MIT',
         'dependencies': dependencies,
         'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
@@ -93,6 +97,7 @@ Build tools and the Android platform/runtime are installed separately.
    the hash-pinned OpenXR Android loader AAR. The matching full loader SDK source
    is supplied under `dependencies`; its version/commit/hash are in the lockfile.
 4. In `CyVR_Player`, run `python tools/prepare_splats.py`,
+   `python tools/build_codecs.py`,
    `python tools/build_subtitles.py --target android`, then
    `python tools/build_ffmpeg_android.py --alpha`.
    The script builds Mbed TLS and FFmpeg in separate Alpha directories. It maps

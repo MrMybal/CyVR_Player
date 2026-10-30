@@ -1,4 +1,5 @@
 #include "cyvr/player/android/software_video.hpp"
+#include "cyvr/player/multiview.hpp"
 #include <algorithm>
 #include <unistd.h>
 extern "C" {
@@ -17,16 +18,17 @@ struct SoftwareVideo::Impl {
   VideoColor color;
   std::uint64_t epoch;
   std::int64_t next_pts{},period{40000};
-  bool end{};
+  bool end{},stereo{};
   FramePtr pending;
   SwsContext* scale{};
   int width{},height{},format{};
   std::vector<std::shared_ptr<Buffer>> pool;
-  Impl(const Demuxer& in,int track,VideoColor c,std::uint64_t e,std::int64_t start):input(in),stream(track),decoder(in,track,4),color(c),epoch(e),next_pts(start){for(const auto& t:in.tracks())if(t.index==track && t.nominal_fps>0)period=std::max<std::int64_t>(1,std::int64_t(1000000/t.nominal_fps));}
+  Impl(const Demuxer& in,int track,VideoColor c,std::uint64_t e,std::int64_t start,bool multiview):input(in),stream(track),decoder(in,track,4,64*1024*1024,multiview),color(c),epoch(e),next_pts(start){for(const auto& t:in.tracks())if(t.index==track && t.nominal_fps>0)period=std::max<std::int64_t>(1,std::int64_t(1000000/t.nominal_fps));}
   ~Impl(){sws_freeContext(scale);}
   ImageLease receive(){
     if(!pending){auto result=decoder.receive();end=result.status==DecodeStatus::end;pending=std::move(result.frame);}
     if(!pending)return {};
+    stereo=packed_stereo_frame(*pending);
     const auto* description=av_pix_fmt_desc_get(AVPixelFormat(pending->format));
     if(!description)throw MediaError("Software decoder returned an unknown pixel format");
     const bool deep=description->comp[0].depth>8;
@@ -69,9 +71,10 @@ struct SoftwareVideo::Impl {
     return ImageLease::from_buffer(buffer->value,fence,buffer,*pts,epoch,frame_color);
   }
 };
-SoftwareVideo::SoftwareVideo(const Demuxer& input,int stream,VideoColor color,std::uint64_t epoch,std::int64_t start):impl_(std::make_unique<Impl>(input,stream,color,epoch,start)){}
+SoftwareVideo::SoftwareVideo(const Demuxer& input,int stream,VideoColor color,std::uint64_t epoch,std::int64_t start,bool multiview):impl_(std::make_unique<Impl>(input,stream,color,epoch,start,multiview)){}
 SoftwareVideo::~SoftwareVideo()=default;
 bool SoftwareVideo::send(const AVPacket* packet){return !impl_->pending && impl_->decoder.send(packet);}
 ImageLease SoftwareVideo::receive(){return impl_->receive();}
 bool SoftwareVideo::ended()const{return impl_->end;}
+bool SoftwareVideo::stereo()const{return impl_->stereo;}
 }

@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace cyvr::player {
-enum class FileKind { directory, video, audio, splat, playlist, subtitle, other };
+enum class FileKind { directory, video, audio, splat, playlist, subtitle, key, other };
 struct FileEntry {
     std::string name;
     std::filesystem::path relative_path;

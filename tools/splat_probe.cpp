@@ -6,9 +6,11 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <algorithm>
+#include <numeric>
 using namespace cyvr::player;
 int main(int argc,char** argv){try{
-  if(argc!=2)throw std::runtime_error("splat_probe ASSETS");
+  if(argc!=2 && argc!=4)throw std::runtime_error("splat_probe ASSETS [COUNT FRAMES]");
   std::vector<std::uint8_t> bytes(96);
   for(int n=0;n<3;++n){float p[3]={n==0?-1.f:n==1?1.f:0.f,0,n==2?-.1f:0};float scale[3]={.12f,.06f,.04f};auto* b=bytes.data()+n*32;std::memcpy(b,p,12);std::memcpy(b+12,scale,12);b[24+n]=255;b[27]=255;b[28]=255;b[29]=b[30]=b[31]=128;}
   Cancellation cancel;SplatNormalization normalization;auto cloud=decode_splats(bytes,normalization,cancel);
@@ -23,6 +25,26 @@ int main(int argc,char** argv){try{
   for(int quality=0;quality<4;++quality){settings.quality=quality;renderer.draw(target.image,{320,180},frame,{{0,0,3.5f},{}},{-1,1,.5625f,-.5625f},settings,false);auto pixels=targets.readback(target);unsigned colored=0;for(std::size_t n=0;n<pixels.size();n+=4)if(pixels[n]>32 || pixels[n+1]>32 || pixels[n+2]>32)++colored;if(colored<20 || renderer.drawn()!=3)throw std::runtime_error("Gaussian Vulkan rendering or GPU sorting failed");if(!quality)native=std::move(pixels);}
   settings.quality=0;renderer.draw(target.image,{320,180},frame,{{.06f,0,3.5f},{}},{-1,1,.5625f,-.5625f},settings,false);if(native==targets.readback(target))throw std::runtime_error("Gaussian scene did not react to stereo camera translation");
   targets.destroyTarget(target);std::cout<<"PLY/SPLAT parsing, malformed input rejection, GPU culling/radix sorting, stereo view translation and Native/CAS/FSR/GSR passed\n";
+  if(argc==4){
+    const auto count=std::stoul(argv[2]),frames=std::stoul(argv[3]);
+    if(count<100 || count>1000000 || frames<8 || frames>1000)throw std::runtime_error("Benchmark exceeds its scene/frame budget");
+    std::vector<std::uint8_t> dense(count*32);std::uint32_t random=1729;
+    auto uniform=[&]{random=1664525u*random+1013904223u;return float(random>>8)/16777216.f;};
+    for(std::size_t n=0;n<count;++n){auto* b=dense.data()+n*32;float p[3]={uniform()*2-1,uniform()*2-1,uniform()*2-1};float scale[3]={.003f+uniform()*.002f,.003f+uniform()*.002f,.003f+uniform()*.002f};std::memcpy(b,p,12);std::memcpy(b+12,scale,12);b[24]=std::uint8_t(uniform()*255);b[25]=std::uint8_t(uniform()*255);b[26]=std::uint8_t(uniform()*255);b[27]=180;b[28]=255;b[29]=b[30]=b[31]=128;}
+    SplatNormalization norm;auto scene=decode_splats(dense,norm,cancel);SplatSnapshot sample{scene,2,0};
+    auto output=targets.createTarget(1920,1920);
+    for(int quality=0;quality<4;++quality){
+      settings.quality=quality;std::vector<double> timings;
+      for(std::size_t n=0;n<frames+4;++n){
+        const auto start=std::chrono::steady_clock::now();
+        for(int eye=0;eye<2;++eye)renderer.draw(output.image,{1920,1920},sample,{{(eye?1.f:-1.f)*.032f+float(n)*.0001f,0,3.5f},{}},{-1,1,1,-1},settings,false);
+        if(n>=4)timings.push_back(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count());
+      }
+      std::sort(timings.begin(),timings.end());const double mean=std::accumulate(timings.begin(),timings.end(),0.)/timings.size();
+      std::cout<<"{\"splats\":"<<count<<",\"width_per_eye\":1920,\"height_per_eye\":1920,\"stereo_frames\":"<<frames<<",\"quality\":"<<quality<<",\"cpu_submit_wait_mean_ms\":"<<mean<<",\"cpu_submit_wait_p95_ms\":"<<timings[std::min(timings.size()-1,timings.size()*95/100)]<<"}\n"<<std::flush;
+    }
+    targets.destroyTarget(output);return 0;
+  }
   const auto folder=std::filesystem::temp_directory_path()/("cyvr-splat-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));std::filesystem::create_directories(folder);
   struct Cleanup{std::filesystem::path path;~Cleanup(){std::error_code error;std::filesystem::remove_all(path,error);}}cleanup{folder};
   for(int n=0;n<2;++n){auto content=bytes;if(n)for(std::size_t i=24;i<content.size();i+=32){content[i]=0;content[i+1]=255;content[i+2]=0;}std::ofstream(folder/(std::to_string(n)+".splat"),std::ios::binary).write(reinterpret_cast<const char*>(content.data()),content.size());}

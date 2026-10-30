@@ -12,6 +12,7 @@
 #include <memory>
 #ifdef __ANDROID__
 #include "cyvr/player/android/surface_decoder.hpp"
+#include "cyvr/player/android/audio_playback.hpp"
 #endif
 
 namespace cyvr::player {
@@ -43,6 +44,7 @@ struct PlayerState {
   double nominal_fps{};
   bool ready{}, playing{}, seekable{}, ended{};
   bool volumetric{};
+  bool multiview{};
   std::string audio_status,subtitle_status;
 };
 // One serialized media worker. UI, filesystem and network never share a lock
@@ -56,6 +58,7 @@ public:
             bool autoplay = true, TrackSelection selection = {});
   bool select_track(TrackKind,int index);
   bool external_subtitle(std::string location);
+  bool clearkey_file(std::string location);
   TrackSelection selection() const;
   SubtitleSnapshot subtitles() const;
   SplatSnapshot splats() const;
@@ -67,6 +70,8 @@ public:
   void frame_submitted(std::uint64_t epoch, std::int64_t pts_us);
 #ifdef __ANDROID__
   android::ImageLease take_frame(); // only images due on the presentation clock
+  std::optional<std::int64_t> audio_position_us() const;
+  std::optional<android::AudioPlaybackStats> audio_metrics() const;
 #endif
 private:
   struct Impl;

@@ -4,14 +4,16 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <algorithm>
 using namespace cyvr;
 using namespace cyvr::player;
 int main(int argc, char **argv) {
   try {
-    if (argc != 5 && argc != 6)
+    if (argc < 5 || argc > 8)
       throw std::invalid_argument(
           "FILE HARDWARE_CODEC ASSETS_DIR OUTPUT_PPM [controls]");
-    const std::string mode = argc == 6 ? argv[5] : "native";
+    const std::string mode = argc >= 6 ? argv[5] : "native";
+    const unsigned minimum=argc>=7?unsigned(std::stoul(argv[6])):24;
     const bool controls = mode == "controls";
     ImageSettings settings;
     settings.quality = mode == "cas"   ? 1
@@ -68,12 +70,17 @@ int main(int argc, char **argv) {
     targets.initialize(VK_FORMAT_R8G8B8A8_SRGB, assets);
     Platform platform;
     platform.hardware_codec = [&](const std::string &, int, int) {
-      return std::string(argv[2]);
+      return std::string(argv[2])=="software"?std::string{}:std::string(argv[2]);
     };
     PlayerSession session(platform);
-    session.open(argv[1], "GPU probe");
+    TrackSelection selection;if(argc==8)selection.clearkey_file=argv[7];
+    session.open(argv[1], "GPU probe",0,true,selection);
     Target target;
     std::uint64_t presented{};
+    bool multiview=false,audio_started=false;
+    std::vector<std::int64_t> av_offset;
+    VideoMetrics metrics;
+    std::optional<android::AudioPlaybackStats> audio_metrics;
     {
       VideoRenderer video(gpu, VK_FORMAT_R8G8B8A8_SRGB, assets);
       auto start = std::chrono::steady_clock::now();
@@ -82,11 +89,13 @@ int main(int argc, char **argv) {
       while (std::chrono::steady_clock::now() - start <
              std::chrono::seconds(15)) {
         const auto state = session.state();
+        multiview|=state.multiview;
         if (!state.ready && state.status != "Choose a video." &&
             state.status != "Opening media...")
           throw std::runtime_error(state.status);
         auto image = session.take_frame();
         if (image) {
+          if(const auto clock=session.audio_position_us()){audio_started=true;av_offset.push_back(image.pts_us-*clock);}
           if (check_seek) {
             if (image.epoch == old_epoch || image.pts_us < 1'000'000)
               throw std::runtime_error("Stale frame after seek");
@@ -95,12 +104,12 @@ int main(int argc, char **argv) {
           old_epoch = image.epoch;
           if (!target.image) {
             const auto extent =
-                processed_extent(state.width, state.height, settings, 0);
+                processed_extent(state.width, state.height, settings, state.multiview?1:0);
             target = targets.createTarget(extent.width, extent.height);
           }
           video.draw_retained(
               target.image, {uint32_t(state.width), uint32_t(state.height)},
-              {target.width, target.height}, image, settings, 0, false);
+              {target.width, target.height}, image, settings, state.multiview?1:0, false);
           if (controls && !controls_done && video.presented() >= 12) {
             session.pause(true);
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -117,11 +126,13 @@ int main(int argc, char **argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
       presented = video.presented();
+      metrics=session.metrics();
+      audio_metrics=session.audio_metrics();
       if (controls && (!controls_done || check_seek))
         throw std::runtime_error("Control validation incomplete");
     }
     session.stop();
-    if (presented < 24 || !target.image)
+    if (presented < minimum || !target.image)
       throw std::runtime_error("Too few video frames presented");
     auto pixels = targets.readback(target);
     std::uint64_t nonblack{};
@@ -138,9 +149,24 @@ int main(int argc, char **argv) {
     targets.destroyTarget(target);
     if (nonblack < area / 4)
       throw std::runtime_error("GPU output is unexpectedly black");
+    std::sort(av_offset.begin(),av_offset.end());
+    const auto low=av_offset.empty()?0:av_offset[av_offset.size()/20];
+    const auto high=av_offset.empty()?0:av_offset[std::min(av_offset.size()-1,av_offset.size()*19/20)];
     std::cout << "{\"presented_frames\":" << presented
               << ",\"nonblack_pixels\":" << nonblack
-              << ",\"render_path\":\"MediaCodec-AHB-Vulkan\",\"cpu_readback\":"
+              << ",\"stereo\":" << (multiview?"true":"false")
+              << ",\"audio_started\":" << (audio_started?"true":"false")
+              << ",\"decoded_frames\":" << metrics.decoded << ",\"late_drops\":" << metrics.dropped
+              << ",\"audio_relative_pts_p05_us\":" << low << ",\"audio_relative_pts_p95_us\":" << high
+              << ",\"audio_underrun_frames\":" << (audio_metrics?audio_metrics->queue.underrun:0)
+              << ",\"audio_gap_frames\":" << (audio_metrics?audio_metrics->queue.gap:0)
+              << ",\"audio_expired_frames\":" << (audio_metrics?audio_metrics->queue.expired:0)
+              << ",\"audio_peak\":" << (audio_metrics?audio_metrics->peak:0)
+              << ",\"audio_limited_samples\":" << (audio_metrics?audio_metrics->limited:0)
+              << ",\"audio_invalid_samples\":" << (audio_metrics?audio_metrics->invalid:0)
+              << ",\"audio_xruns\":" << (audio_metrics?audio_metrics->xruns:0)
+              << ",\"audio_buffer_frames\":" << (audio_metrics?audio_metrics->buffer_frames:0)
+              << ",\"render_path\":\"decoded-AHB-Vulkan\",\"cpu_readback\":"
                  "\"diagnostic-only-after-"
                  "playback\"}\n";
     return 0;

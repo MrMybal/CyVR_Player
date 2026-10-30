@@ -1,4 +1,5 @@
 #include "cyvr/player/demuxer.hpp"
+#include "cyvr/player/multiview.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -9,6 +10,7 @@ extern "C" {
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <cctype>
 #include <limits>
 #include <mutex>
 #include <filesystem>
@@ -63,6 +65,8 @@ struct Demuxer::Impl {
     StreamOptions options;
     std::vector<TrackInfo> tracks;
     std::vector<ChapterInfo> chapters;
+    PacketPtr prefetched;
+    std::int64_t transport_origin=AV_NOPTS_VALUE;
     int fd=-1;
     std::int64_t offset=0,length=-1,position=0;
     bool fd_seekable=false;
@@ -188,6 +192,12 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
     settings.set("tls_verify","1");
     if(!options.ca_file.empty()) settings.set("ca_file",options.ca_file.c_str());
     if(options.rtsp_over_tcp) settings.set("rtsp_transport","tcp");
+    if(!options.clear_keys.empty()) {
+        std::string keys;
+        const auto hex=[](const auto& bytes){std::string out;for(auto b:bytes){out+="0123456789abcdef"[b>>4];out+="0123456789abcdef"[b&15];}return out;};
+        for(const auto& key:options.clear_keys){if(!keys.empty())keys+=':';keys+=hex(key.id)+'='+hex(key.key);}
+        settings.set("decryption_keys",keys.c_str());
+    }
     if(source.kind==SourceKind::network){
         // Nested HLS/DASH requests cannot escape into local files or devices.
         settings.set("protocol_whitelist","http,https,tcp,tls,rtp,udp,crypto,srt");
@@ -199,8 +209,31 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         ? "file:"+std::filesystem::absolute(std::filesystem::u8path(source.location)).generic_u8string()
         : source.location;
     const char* location=source.kind==SourceKind::descriptor ? nullptr : location_text.c_str();
-    next->check(avformat_open_input(&next->format,location,nullptr,&settings.value),"Open media");
+    const AVInputFormat* hint=nullptr;
+    if(source.kind==SourceKind::file){
+        auto extension=std::filesystem::u8path(source.location).extension().u8string();
+        std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return char(std::tolower(c));});
+        if(extension==".264" || extension==".h264")hint=av_find_input_format("h264");
+        if(extension==".265" || extension==".h265" || extension==".hevc")hint=av_find_input_format("hevc");
+        if(extension==".ts" || extension==".mts" || extension==".m2ts" || extension==".ssif")hint=av_find_input_format("mpegts");
+    }
+    next->check(avformat_open_input(&next->format,location,hint,&settings.value),"Open media");
+    // The AVC parser cannot delimit MVC extension slices. MPEG-TS PES packets
+    // already carry access units; retaining them keeps the dependent PID in
+    // demux order instead of collecting it into one late packet at EOF.
+    bool transport_mvc=false;
+    if(next->format->iformat && std::string(next->format->iformat->name)=="mpegts"){
+        bool mvc=false;for(unsigned i=0;i<next->format->nb_streams;++i)mvc|=next->format->streams[i]->codecpar->codec_tag==0x20;
+        if(mvc){next->format->flags|=AVFMT_FLAG_NOPARSE|AVFMT_FLAG_NOFILLIN;transport_mvc=true;}
+    }
     next->check(avformat_find_stream_info(next->format,nullptr),"Probe media");
+    if(transport_mvc && next->format->start_time==AV_NOPTS_VALUE){
+        next->prefetched.reset(av_packet_alloc());if(!next->prefetched)throw std::bad_alloc();
+        const int result=av_read_frame(next->format,next->prefetched.get());
+        if(result>=0){const auto* p=next->prefetched.get();const auto ts=p->dts!=AV_NOPTS_VALUE?p->dts:p->pts;if(ts!=AV_NOPTS_VALUE)next->transport_origin=av_rescale_q(ts,next->stream(p->stream_index)->time_base,microseconds);}
+        else if(result==AVERROR_EOF || result==AVERROR(EAGAIN))next->prefetched.reset();
+        else next->check(result,"Read transport timestamp");
+    }
     for(unsigned i=0;i<next->format->nb_streams;++i){
         auto* stream=next->format->streams[i];
         const auto* p=stream->codecpar;
@@ -213,7 +246,7 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         track.hearing_impaired=stream->disposition&AV_DISPOSITION_HEARING_IMPAIRED;
         track.visual_impaired=stream->disposition&AV_DISPOSITION_VISUAL_IMPAIRED;
         track.width=p->width; track.height=p->height; track.sample_rate=p->sample_rate; track.channels=p->ch_layout.nb_channels;
-        if(p->codec_type==AVMEDIA_TYPE_VIDEO){const auto rate=av_guess_frame_rate(next->format,stream,nullptr);if(rate.num>0&&rate.den>0)track.nominal_fps=av_q2d(rate);}
+        if(p->codec_type==AVMEDIA_TYPE_VIDEO){auto rate=av_guess_frame_rate(next->format,stream,nullptr);if(rate.num>0&&rate.den>0 && av_q2d(rate)>240)rate=stream->avg_frame_rate;if(rate.num>0&&rate.den>0 && av_q2d(rate)<=240)track.nominal_fps=av_q2d(rate);}
         if(stream->duration!=AV_NOPTS_VALUE) track.duration_us=av_rescale_q(stream->duration,stream->time_base,microseconds);
         next->tracks.push_back(std::move(track));
     }
@@ -222,6 +255,7 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         next->chapters.push_back({av_rescale_q(c->start,c->time_base,microseconds),av_rescale_q(c->end,c->time_base,microseconds),tag(c->metadata,"title")});
     }
     impl_=std::move(next);
+    for(auto& track:impl_->tracks)if(track.kind==TrackKind::video){const int dependent=mvc_dependent_stream(track.index);if(dependent>=0)impl_->tracks[std::size_t(dependent)].companion_video=track.index;}
 }
 const std::vector<ChapterInfo>& Demuxer::chapters() const {if(!impl_)throw std::logic_error("Media is closed");return impl_->chapters;}
 std::vector<FontAttachment> Demuxer::fonts() const {
@@ -258,6 +292,7 @@ bool Demuxer::seekable() const {
 PacketRead Demuxer::read(){
     if(!impl_) throw std::logic_error("Media is closed");
     if(impl_->cancel->cancelled()) throw MediaError("Read media: cancelled");
+    if(impl_->prefetched)return {ReadStatus::packet,std::move(impl_->prefetched)};
     PacketPtr packet(av_packet_alloc());
     if(!packet) throw std::bad_alloc();
     impl_->arm(impl_->options.read_timeout_ms);
@@ -269,7 +304,7 @@ PacketRead Demuxer::read(){
 }
 std::int64_t Demuxer::origin_us() const {
     if(!impl_) throw std::logic_error("Media is closed");
-    return impl_->format->start_time==AV_NOPTS_VALUE ? 0 : impl_->format->start_time;
+    return impl_->format->start_time!=AV_NOPTS_VALUE ? impl_->format->start_time : impl_->transport_origin!=AV_NOPTS_VALUE?impl_->transport_origin:0;
 }
 void Demuxer::seek(std::int64_t position){
     if(!impl_) throw std::logic_error("Media is closed");
@@ -279,6 +314,7 @@ void Demuxer::seek(std::int64_t position){
     if(!seekable()) throw MediaError("This source does not support seeking");
     impl_->arm(impl_->options.open_timeout_ms);
     impl_->check(avformat_seek_file(impl_->format,-1,INT64_MIN,origin+position,origin+position,0),"Seek media");
+    impl_->prefetched.reset();
 }
 const AVCodecParameters* Demuxer::codec_parameters(int stream) const {
     if(!impl_) throw std::logic_error("Media is closed");
@@ -305,15 +341,40 @@ int Demuxer::best_audio_stream() const {
     if(!impl_) throw std::logic_error("Media is closed");
     return av_find_best_stream(impl_->format,AVMEDIA_TYPE_AUDIO,-1,-1,nullptr,0);
 }
+int Demuxer::mvc_dependent_stream(int base)const{
+    if(!impl_)throw std::logic_error("Media is closed");
+    const auto* parameters=impl_->stream(base)->codecpar;
+    if(parameters->codec_id!=AV_CODEC_ID_H264 || parameters->codec_tag!=0x1b)return -1;
+    const auto* format=impl_->format;
+    for(unsigned p=0;p<format->nb_programs;++p){
+        const auto* program=format->programs[p];
+        if(std::find(program->stream_index,program->stream_index+program->nb_stream_indexes,unsigned(base))==program->stream_index+program->nb_stream_indexes)continue;
+        int candidate=-1;
+        unsigned bases=0;
+        for(unsigned n=0;n<program->nb_stream_indexes;++n)if(impl_->stream(int(program->stream_index[n]))->codecpar->codec_tag==0x1b)++bases;
+        if(bases!=1)return -1;
+        for(unsigned n=0;n<program->nb_stream_indexes;++n){const int i=int(program->stream_index[n]);const auto* other=impl_->stream(i)->codecpar;if(other->codec_id==AV_CODEC_ID_H264 && other->codec_tag==0x20){if(candidate>=0)return -1;candidate=i;}}
+        return candidate;
+    }
+    return -1;
+}
 
 struct SoftwareDecoder::Impl {
     AVCodecContext* codec=nullptr;
+    std::unique_ptr<MvcDecoder> mvc;
+    StereoFrameAssembler views;
+    bool multiview{};
     ~Impl(){ avcodec_free_context(&codec); }
 };
-SoftwareDecoder::SoftwareDecoder(const Demuxer& demuxer,int stream,int threads,std::int64_t max_pixels) : impl_(std::make_unique<Impl>()) {
+SoftwareDecoder::SoftwareDecoder(const Demuxer& demuxer,int stream,int threads,std::int64_t max_pixels,bool decode_views) : impl_(std::make_unique<Impl>()) {
     if(threads<1 || threads>8) throw std::invalid_argument("Decoder thread budget must be 1..8");
     const auto* parameters=demuxer.codec_parameters(stream);
-    const auto* decoder=avcodec_find_decoder(parameters->codec_id);
+    if(max_pixels<1||max_pixels>64*1024*1024)throw std::invalid_argument("Invalid decoder pixel budget");
+    if(decode_views && parameters->codec_id==AV_CODEC_ID_H264) {
+        impl_->mvc=std::make_unique<MvcDecoder>(demuxer,stream,threads,max_pixels);return;
+    }
+    const auto* decoder=parameters->codec_id==AV_CODEC_ID_AV1 ? avcodec_find_decoder_by_name("libdav1d") : nullptr;
+    if(!decoder)decoder=avcodec_find_decoder(parameters->codec_id);
     if(!decoder) throw MediaError("No software decoder in this FFmpeg build");
     impl_->codec=avcodec_alloc_context3(decoder);
     if(!impl_->codec) throw std::bad_alloc();
@@ -321,27 +382,38 @@ SoftwareDecoder::SoftwareDecoder(const Demuxer& demuxer,int stream,int threads,s
     if(result<0) fail("Configure software decoder",result);
     impl_->codec->pkt_timebase={demuxer.time_base_numerator(stream),demuxer.time_base_denominator(stream)};
     impl_->codec->thread_count=threads;
-    if(max_pixels<1||max_pixels>64*1024*1024)throw std::invalid_argument("Invalid decoder pixel budget");
     impl_->codec->max_pixels=max_pixels;
+    impl_->multiview=decode_views && parameters->codec_id==AV_CODEC_ID_HEVC;
+    if(impl_->multiview && av_opt_set(impl_->codec->priv_data,"view_ids","-1",0)<0)
+        throw MediaError("This HEVC decoder cannot output stereoscopic views");
     result=avcodec_open2(impl_->codec,decoder,nullptr);
     if(result<0) fail("Open software decoder",result);
 }
 SoftwareDecoder::~SoftwareDecoder()=default;
 bool SoftwareDecoder::send(const AVPacket* packet){
+    if(impl_->mvc)return impl_->mvc->send(packet);
     const auto result=avcodec_send_packet(impl_->codec,packet);
     if(result==AVERROR(EAGAIN)) return false;
     if(result<0) fail("Send decoder packet",result);
     return true;
 }
 FrameRead SoftwareDecoder::receive(){
+    if(impl_->mvc)return impl_->mvc->receive();
+    for(int attempt=0;attempt<16;++attempt){
     FramePtr frame(av_frame_alloc());
     if(!frame) throw std::bad_alloc();
     const auto result=avcodec_receive_frame(impl_->codec,frame.get());
     if(result==AVERROR(EAGAIN)) return {DecodeStatus::again,{}};
-    if(result==AVERROR_EOF) return {DecodeStatus::end,{}};
+    if(result==AVERROR_EOF) {
+        if(!impl_->views.empty())throw MediaError("Multiview video ended with unmatched eyes");
+        return {DecodeStatus::end,{}};
+    }
     if(result<0) fail("Receive decoded frame",result);
+    if(impl_->multiview){frame=impl_->views.push(std::move(frame));if(!frame)continue;}
     return {DecodeStatus::frame,std::move(frame)};
+    }
+    return {DecodeStatus::again,{}};
 }
-void SoftwareDecoder::flush(){ avcodec_flush_buffers(impl_->codec); }
+void SoftwareDecoder::flush(){ if(impl_->mvc)impl_->mvc->flush();else avcodec_flush_buffers(impl_->codec);impl_->views.clear(); }
 } // namespace cyvr::player
 

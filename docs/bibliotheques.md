@@ -48,15 +48,21 @@ Un conteneur, un codec et une projection sont trois choses différentes. Une vid
 | Vidéo normale | Écran mono, rapport d'image, rotation, pixel aspect ratio | Métadonnées, géométrie et couleurs |
 | Vidéo 3D | SBS/TB, demi ou pleine résolution, inversion des yeux | Rapport affiché par œil, ordre des yeux et absence de contamination entre vues |
 | Immersion | 180°/360° équirectangulaire mono/stéréo ; cubemap et autres projections plus tard | Métadonnées, orientation, coutures et projection réelle |
-| Vidéo spatiale multivue | MVC / MV-HEVC : chantier distinct | Un flux décodable ne prouve pas que les deux vues peuvent être obtenues |
-| Audio et sous-titres | Décodage audio, sélection des pistes ; SRT/WebVTT puis formats complexes | Synchronisation, langue, encodage ; libass à évaluer pour ASS/SSA |
+| Vidéo spatiale multivue | MVC via edge264-mvc BSD ; MV-HEVC via FFmpeg, deux yeux en logiciel | Un flux décodable ne prouve pas que les deux vues peuvent être obtenues |
+| Audio et sous-titres | Décodage audio, sélection des pistes ; SRT/WebVTT puis formats complexes | Synchronisation, langue, encodage ; libass pour ASS/SSA et bitmaps FFmpeg |
 | Réseau | Lecture HTTP(S), puis HLS/DASH et partages suivant les besoins | Backend TLS et protocoles compilés, débit, reprise et buffers bornés |
 | Gaussian Splatting | Scènes statiques, puis séquences temporelles selon schéma défini | Format exact, mémoire, tri GPU, LOD et cohérence temporelle |
 
-Ce tableau décrit la couverture visée. L'état implémenté et testé par plateforme est précisé dans [Fichiers et flux](sources-et-flux.md). « Tous les formats » ne peut pas être garanti sur un SoC mobile. Le secours logiciel peut augmenter la couverture sans permettre la même résolution/cadence. Aucun support de contenu chiffré nécessitant un système DRM n'est établi ici.
+Ce tableau décrit la couverture visée. L'état implémenté et testé par plateforme est précisé dans [Fichiers et flux](sources-et-flux.md). « Tous les formats » ne peut pas être garanti sur un SoC mobile. Le secours logiciel peut augmenter la couverture sans permettre la même résolution/cadence. L’import de clés ClearKey JWK fournies par l’utilisateur permet le déchiffrement CENC AES-128 ; aucun système de licences Widevine/PlayReady/FairPlay n’est intégré.
 
 ## Détection matérielle
 
 Ne pas coder une promesse « 8K », « AV1 » ou « 120 FPS » à partir du seul nom Quest 2/3/3S/Pro. Le système doit examiner `isHardwareAccelerated`, `isFormatSupported`, les profils et les tailles/cadences admises, puis tenter de configurer le codec. Le helper `CodecProbe.java` fournit des candidats, sans garantir leur débit soutenu. [Capacités Android](https://developer.android.com/reference/android/media/MediaCodecInfo.VideoCapabilities).
 
 Mesurer ensuite une vraie séquence longue, y compris en 10 bits et à débit élevé. Le nombre de décodeurs simultanés et la conversion YCbCr peuvent aussi modifier les résultats. Le fallback logiciel doit être explicite ; il ne faut pas basculer silencieusement vers un décodage lourd qui ferait perdre la fluidité VR.
+
+## Décodeurs stéréoscopiques et AV1 — 0.4.6
+
+Le profil Android ajoute dav1d 1.5.4 (BSD-2-Clause), compilé avec son assembleur ARM64, en secours de MediaCodec pour AV1. edge264-mvc (BSD-3-Clause, commit verrouillé dans `dependencies.lock.json`) fournit les deux vues MVC ; FFmpeg HEVC les fournit avec `view_ids=-1`. Les vues MV-HEVC sont appariées par PTS, puis copiées en SBS pleine largeur sans perdre les échantillons 10 bits. Les pistes MVC MPEG-TS associées sont conservées en PES, dans le même programme. Les tests comparent les images et chaque œil entre Windows et ARM64.
+
+Sources : [dav1d](https://www.videolan.org/projects/dav1d.html), [edge264-mvc](https://github.com/jens-duttke/edge264-mvc), [options MV-HEVC FFmpeg](https://ffmpeg.org/ffmpeg-codecs.html#hevc), [ClearKey JWK](https://www.w3.org/TR/encrypted-media/#clear-key-license-format).

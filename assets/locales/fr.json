@@ -134,5 +134,11 @@
   "Open a seekable video before choosing subtitles.": "Ouvrez une vidéo navigable avant de choisir des sous-titres.",
   "No tracks in this category.": "Aucune piste dans cette catégorie.",
   "SUBTITLE": "SOUS-TITRE",
-  "Gaussian scene": "Scène Gaussian Splatting"
+  "Gaussian scene": "Scène Gaussian Splatting",
+  "KEYS": "CLÉS",
+  "Import ClearKey (JWK)": "Importer ClearKey (JWK)",
+  "Remove ClearKey": "Retirer ClearKey",
+  "ClearKey file selected": "Fichier ClearKey sélectionné",
+  "Choose a .jwk file in the library.": "Choisissez un fichier .jwk dans la bibliothèque.",
+  "Open a video before choosing a ClearKey file.": "Ouvrez une vidéo avant de choisir un fichier ClearKey."
 }

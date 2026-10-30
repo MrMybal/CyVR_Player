@@ -49,6 +49,7 @@ std::string MediaSource::display_name() const {
     return location.substr(0,begin)+authority;
 }
 void StreamOptions::validate() const {
+    if(clear_keys.size()>16)throw std::invalid_argument("ClearKey track budget exceeded");
     if (open_timeout_ms < 1 || open_timeout_ms > 120000 || read_timeout_ms < 1 || read_timeout_ms > 120000 ||
         probe_bytes < 32768 || probe_bytes > 64*1024*1024 || analyze_us < 0 || analyze_us > 30000000)
         throw std::invalid_argument("Invalid stream timeout or probe budget");

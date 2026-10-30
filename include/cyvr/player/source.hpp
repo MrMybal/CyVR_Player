@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <array>
+#include <vector>
 
 namespace cyvr::player {
 class Cancellation {
@@ -27,6 +29,7 @@ struct MediaSource {
     std::string display_name() const;
 };
 
+struct ContentKey {std::array<std::uint8_t,16> id{},key{};};
 struct StreamOptions {
     int open_timeout_ms = 10000;
     int read_timeout_ms = 10000;
@@ -37,6 +40,7 @@ struct StreamOptions {
     // Empty uses backend system trust where available. Android Mbed TLS uses
     // a PEM exported by SystemCertificates from the platform trust manager.
     std::string ca_file;
+    std::vector<ContentKey> clear_keys;
     void validate() const;
 };
 } // namespace cyvr::player

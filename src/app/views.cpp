@@ -185,6 +185,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                tr(item.directory                                     ? "FOLDER"
                   : classify_extension(item.name) == FileKind::splat ? "SPLATS"
                   : classify_extension(item.name) == FileKind::subtitle ? "SUBTITLE"
+                  : classify_extension(item.name) == FileKind::key ? "KEYS"
                                                                      : "VIDEO"),
                accent);
       d.text(195, y + 16, 24, fit(d, item.name, 1010), white);
@@ -301,7 +302,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
            state_.ready && state_.seekable);
     button(d, 1023, {746, 814, 200, 64}, "Stop", false, state_.ready);
     button(d, 1024, {964, 814, 444, 64}, "Hide interface", false, state_.ready);
-    button(d,1400,{32,895,650,52},"Tracks, subtitles and chapters",false,state_.ready);
+    button(d,1400,{32,895,650,52},"Tracks, subtitles and chapters",false,!source_.empty());
   } else if (page_ == 2) {
     d.text(36, 187, 34, tr("Open a video stream"), white);
     d.text(36, 243, 22, tr("HTTP(S), HLS, RTSP — enter the complete address."),

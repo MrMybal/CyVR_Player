@@ -192,6 +192,7 @@ int main() {
       state.image.zoom = 2.25f;
       state.display_tab = 2;
       state.tracks={3,5,8,"content://test/document/captions"};
+      state.tracks.clearkey_file="content://test/document/keys.jwk";
       state.tracks_open=true;state.track_tab=2;state.track_offset=7;
       if (!save_application_state(platform.state_file, state))
         throw std::runtime_error("State update failed");
@@ -199,7 +200,7 @@ int main() {
       if (!loaded || loaded->source != state.source ||
           loaded->position_us != 1234567 || loaded->playing ||
           loaded->parents != state.parents || loaded->image != state.image ||
-          loaded->display_tab != 2 || loaded->tracks.video!=3 || loaded->tracks.audio!=5 || loaded->tracks.subtitle!=8 || loaded->tracks.external_subtitle!=state.tracks.external_subtitle || !loaded->tracks_open || loaded->track_tab!=2 || loaded->track_offset!=7)
+          loaded->display_tab != 2 || loaded->tracks.video!=3 || loaded->tracks.audio!=5 || loaded->tracks.subtitle!=8 || loaded->tracks.external_subtitle!=state.tracks.external_subtitle || loaded->tracks.clearkey_file!=state.tracks.clearkey_file || !loaded->tracks_open || loaded->track_tab!=2 || loaded->track_offset!=7)
         throw std::runtime_error(
             "Document or paused position lost during state transfer");
       // Previous app versions wrote the same base record without the optional
@@ -229,6 +230,34 @@ int main() {
       const auto duration = app.session().state().duration_us;
       if (duration != 2000000 || !app.session().state().seekable)
         throw std::runtime_error("Timeline fixture metadata is invalid");
+      model.presentation=Presentation::Immersive;app.tick();model.drawMain(draw);
+      if(!model.compactInterface)throw std::runtime_error("Immersive video did not open compact controls");
+      auto controllerClick=[&](int id,unsigned hand){
+        model.drawMain(draw);
+        auto widget=std::find_if(model.widgets().begin(),model.widgets().end(),[&](const auto& w){return w.id==id && w.enabled;});
+        if(widget==model.widgets().end())throw std::runtime_error("Missing immersive control");
+        const Vec2 pixels{widget->rect.x+widget->rect.w*.5f,widget->rect.y+widget->rect.h*.5f};
+        PanelGeometry panel;
+        const Vec3 origin{0,1.45f,0};
+        const Vec3 target=panel.pose.position+Vec3{(pixels.x/panel.pixelsW-.5f)*panel.width,(.5f-pixels.y/panel.pixelsH)*panel.height,0};
+        auto route=[&](bool down){
+          // Use the XR host's surface classifier after capture, then the real
+          // panel ray intersection and UiModel press/hold/release dispatcher.
+          const auto hit=isDockWidget(model.captured(hand))?Hit{}:intersectPanel(origin,target-origin,panel);
+          model.pointer(hand,hit.valid?hit.pixels:Vec2{-100,-100},down);
+        };
+        route(true);app.tick();model.drawMain(draw);route(true);
+        if(model.captured(hand)!=id)throw std::runtime_error("Controller capture left its application control");
+        route(false);app.tick();model.drawMain(draw);
+      };
+      for(unsigned hand:{0u,1u}){
+        controllerClick(1360,hand);
+        if(model.compactInterface || model.interfaceHidden || app.page()!=1)throw std::runtime_error("Full interface click was lost on trigger release");
+        controllerClick(1361,hand);
+        if(!model.compactInterface || model.interfaceHidden)throw std::runtime_error("Compact controls click was lost on trigger release");
+      }
+      if(!isDockWidget(600) || !isDockWidget(611) || isDockWidget(605))throw std::runtime_error("Dock routing broke the dock or main drag handle");
+      model.presentation=Presentation::Panel2D;app.tick();
       model.setInterfaceHidden(true);
       if (!model.applicationController(1, {}, .8f, .8f, {{0, .5f, 0}, {}},
                                        true))

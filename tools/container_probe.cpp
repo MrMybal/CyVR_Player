@@ -54,7 +54,7 @@ int main(int argc,char** argv){
       auto cleared=renderer.render(timeline.at(1150000),320,180);if(!cleared || !cleared->rgba.empty())throw std::runtime_error("PGS overlay did not clear");
       if(!timeline.at(1150000).cues.empty())throw std::runtime_error("PGS display clear failed");
     }
-    cyvr::UiModel ui;Platform platform;platform.root=std::filesystem::u8path(argv[1]).parent_path().u8string();PlayerApplication app(ui,platform);
+    cyvr::UiModel ui;Platform platform;platform.root=std::filesystem::u8path(argv[1]).parent_path().u8string();platform.hardware_codec=[](const std::string&,int,int){return std::string{};};PlayerApplication app(ui,platform);
     auto wait=[&](auto predicate){for(int n=0;n<600;++n){app.tick();if(predicate())return;std::this_thread::sleep_for(std::chrono::milliseconds(5));}throw std::runtime_error("Track switch timed out");};
     app.open(argv[1],"Container fixture");wait([&]{return app.session().state().ready;});app.session().pause(true);app.session().seek(750000);
     int video=-1,audio=-1,sub=-1;
