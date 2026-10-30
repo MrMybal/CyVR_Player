@@ -237,8 +237,20 @@ int main() {
       if (save_application_state(platform.state_file, state) ||
           !load_application_state(platform.state_file))
         throw std::runtime_error("Oversized state replaced the valid state");
+      // A new media resets auto format, while explicit choices survive late
+      // inspection, pause/seek and host replacement. Re-detection is available.
+      app.open((root / "timeline.gif").u8string(),"Fixture_180_LR.gif");
+      wait([&]{return app.session().state().ready && app.session().state().title=="Fixture_180_LR.gif";});app.tick();
+      if(app.stereo!=1 || app.projection!=1 || app.snapshot().format_manual)throw std::runtime_error("Filename layout was not applied at open");
+      app.action(1032);app.action(1042);app.tick();app.save();
+      if(!app.snapshot().format_manual || app.stereo!=2 || app.projection!=2)throw std::runtime_error("Manual format was not retained");
+      if(!app.restore())throw std::runtime_error("Format checkpoint restore failed");
+      wait([&]{return app.session().state().ready;});app.tick();
+      if(app.stereo!=2 || app.projection!=2 || !app.snapshot().format_manual)throw std::runtime_error("Host replacement discarded manual format");
+      app.action(1053);if(app.stereo!=1 || app.projection!=1 || app.snapshot().format_manual)throw std::runtime_error("Explicit format re-detection failed");
       app.open((root / "timeline.gif").u8string());
       wait([&] { return app.session().state().ready; });
+      app.tick();if(app.stereo || app.projection || app.half_stereo || app.swap_eyes)throw std::runtime_error("New ordinary video retained the previous spherical/stereo format");
       const auto duration = app.session().state().duration_us;
       if (duration != 2000000 || !app.session().state().seekable)
         throw std::runtime_error("Timeline fixture metadata is invalid");

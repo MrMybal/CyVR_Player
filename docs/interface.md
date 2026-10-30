@@ -72,3 +72,9 @@ The compact Cinema action opens Display's cinema page. Screen, Environment and A
 The generic foundation adds optional XR-extension negotiation, Black/Dark backgrounds and an environment-only brightness value. Cylinder support is queried at runtime; it is not required to start the 2D host. Environment photos are 4K CC0 with packaged credits. The supplied foundation remains MIT; unrelated changes in a newer working checkout are not required by this release.
 
 Ambilight uses one optional alpha layer behind the film and captions, following the same centre, size and orientation. Both stereo eyes see the same averaged colour field. Its controls remain editable when off; disabling removes the layer immediately. Errors report a message and leave movie playback running; toggle the option to retry.
+
+## 0.4.8 automatic video layout
+
+The selected video track carries independent stereo/projection hints from FFmpeg's codec-parameter side data and container tags. New opens combine them with bounded filename parsing, on the media worker/UI metadata transition only. A media-request identifier prevents a previous worker result from applying its layout to a newer file. Metadata takes priority over naming; decoded multiview has priority for actual output packing. The UI's existing layout controls set manual mode, with explicit re-detection available. No additional per-frame image analysis runs.
+
+FMT1 appends the manual/automatic choice to the existing private checkpoint. Legacy checkpoints keep their existing selections. New files enable detection, while activity changes and process restarts preserve a manual choice for the current source. Ordinary videos receive a neutral 2D layout, rather than inheriting the previous panorama. The Android 2D entry point still creates no OpenXR session.

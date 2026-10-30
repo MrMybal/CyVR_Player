@@ -220,10 +220,18 @@ void PlayerApplication::open(std::string location, std::string title) {
   resume_playing_ = true;
   preview_ready = false;
   render_monitor.reset();
-  session_.open(std::move(location), std::move(title));
+  format_manual_=false;format_track_=-1;
+  format_media_id_=session_.open(std::move(location),std::move(title));
+  refresh_video_format();
   page_ = 1;
   ui_.page = cyvr::Page(page_);
   state_dirty_ = true;
+  ui_.invalidate();
+}
+void PlayerApplication::refresh_video_format(){
+  const bool current=state_.ready && state_.media_id==format_media_id_ && !state_.volumetric;
+  detected_layout_=detect_video_layout(source_,title_,current?state_.layout:VideoLayoutHints{},current?state_.width:0,current?state_.height:0,current?state_.pixel_aspect:1,current && state_.multiview);
+  if(!format_manual_){stereo=detected_layout_.stereo;projection=detected_layout_.projection;half_stereo=detected_layout_.half;swap_eyes=detected_layout_.swap;++processing_request;state_dirty_=true;}
   ui_.invalidate();
 }
 void PlayerApplication::tick() {
@@ -237,7 +245,7 @@ void PlayerApplication::tick() {
   const bool was_ready=state_.ready;
   auto state = session_.state();
   if (state.revision != state_.revision) {
-    if(state.multiview && !state_.multiview){stereo=1;half_stereo=false;state_dirty_=true;}
+    const bool formatChanged=state.ready && state.media_id==format_media_id_ && (state.video_track!=format_track_ || state.multiview!=state_.multiview);
     // Position changes alone are checkpointed every five seconds. Avoid
     // synchronous state-file writes twice a second on the rendering thread.
     if (state.ready != state_.ready || state.playing != state_.playing ||
@@ -245,6 +253,7 @@ void PlayerApplication::tick() {
         state.title != state_.title)
       state_dirty_ = true;
     state_ = std::move(state);
+    if(formatChanged){format_track_=state_.video_track;refresh_video_format();}
     if (!state_.ready || !state_.seekable || state_.duration_us <= 0)
       cancel_scrub();
     if (!state_.ready && state_.status != "Opening media...")
@@ -357,6 +366,7 @@ bool PlayerApplication::action(int id) {
   control_activity();
   cancel_scrub();
   if(id>=1400 && id<1440)return track_action(id);
+  if((id>=1030 && id<=1032) || (id>=1040 && id<=1042) || id==1051 || id==1052)format_manual_=true;
   if (id >= 1000 && id <= 1003) {
     controls_.expand(controls_now());
     page_ = id - 1000;
@@ -423,6 +433,7 @@ bool PlayerApplication::action(int id) {
     stereo = id - 1030;
   else if (id >= 1040 && id <= 1042)
     projection = id - 1040;
+  else if(id==1053){format_manual_=false;refresh_video_format();}
   else if (id == 1050)
     ++video_placement_request;
   else if (id == 1051)
@@ -516,6 +527,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.half_stereo = half_stereo;
   s.swap_eyes = swap_eyes;
   s.image = image;
+  s.format_manual=format_manual_;
   s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
@@ -548,6 +560,7 @@ bool PlayerApplication::restore(bool resume_media) {
   page_ = s.page;
   ui_.page = cyvr::Page(page_);
   offset_ = s.offset;
+  format_manual_=s.format_manual;format_track_=-1;
   stereo = s.stereo;
   projection = s.projection;
   half_stereo = s.half_stereo;
@@ -563,7 +576,7 @@ bool PlayerApplication::restore(bool resume_media) {
   requested_position_ = s.position_us;
   resume_playing_ = s.playing;
   if (resume_media && !source_.empty())
-    session_.open(source_, title_, s.position_us, s.playing,s.tracks);
+    format_media_id_=session_.open(source_, title_, s.position_us, s.playing,s.tracks);
   ui_.invalidate();
   return true;
 }

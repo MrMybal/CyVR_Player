@@ -5,6 +5,8 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 #include <libavutil/opt.h>
+#include <libavutil/stereo3d.h>
+#include <libavutil/spherical.h>
 }
 #include <algorithm>
 #include <cerrno>
@@ -248,6 +250,40 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         track.width=p->width; track.height=p->height; track.sample_rate=p->sample_rate; track.channels=p->ch_layout.nb_channels;
         if(p->codec_type==AVMEDIA_TYPE_VIDEO){auto rate=av_guess_frame_rate(next->format,stream,nullptr);if(rate.num>0&&rate.den>0 && av_q2d(rate)>240)rate=stream->avg_frame_rate;if(rate.num>0&&rate.den>0 && av_q2d(rate)<=240)track.nominal_fps=av_q2d(rate);}
         if(stream->duration!=AV_NOPTS_VALUE) track.duration_us=av_rescale_q(stream->duration,stream->time_base,microseconds);
+        if(track.kind==TrackKind::video){
+            auto& hints=track.layout;
+            // Container StereoMode / st3d and spherical sv3d metadata are
+            // exposed by FFmpeg as codec-parameter side data after probing.
+            if(const auto* data=av_packet_side_data_get(p->coded_side_data,p->nb_coded_side_data,AV_PKT_DATA_STEREO3D);data && data->size>=sizeof(AVStereo3D)){
+                const auto* stereo=reinterpret_cast<const AVStereo3D*>(data->data);
+                if(stereo->type==AV_STEREO3D_2D || stereo->view==AV_STEREO3D_VIEW_LEFT || stereo->view==AV_STEREO3D_VIEW_RIGHT)hints.stereo=0;
+                else if(stereo->type==AV_STEREO3D_SIDEBYSIDE)hints.stereo=1;
+                else if(stereo->type==AV_STEREO3D_TOPBOTTOM)hints.stereo=2;
+                if(hints.stereo)hints.swap=bool(stereo->flags&AV_STEREO3D_FLAG_INVERT);
+            }
+            if(const auto* data=av_packet_side_data_get(p->coded_side_data,p->nb_coded_side_data,AV_PKT_DATA_SPHERICAL);data && data->size>=sizeof(AVSphericalMapping)){
+                const auto* sphere=reinterpret_cast<const AVSphericalMapping*>(data->data);
+                if(sphere->projection==AV_SPHERICAL_EQUIRECTANGULAR)hints.projection=2;
+                else if(sphere->projection==AV_SPHERICAL_HALF_EQUIRECTANGULAR)hints.projection=1;
+                else if(sphere->projection==AV_SPHERICAL_RECTILINEAR)hints.projection=0;
+                else if(sphere->projection==AV_SPHERICAL_EQUIRECTANGULAR_TILE && !sphere->bound_top && !sphere->bound_bottom && std::abs(double(sphere->bound_left)+sphere->bound_right-2147483648.)<2)hints.projection=1;
+                else hints.unsupported_projection=true;
+            }
+            auto normal=[](std::string value){std::string result;for(unsigned char c:value)if(c<128 && std::isalnum(c))result+=char(std::tolower(c));return result;};
+            auto stereo=normal(tag(stream->metadata,"stereo_mode"));
+            if(!hints.stereo){
+                if(stereo=="mono" || stereo=="2d")hints.stereo=0;
+                else if(stereo=="leftright" || stereo=="sidebyside" || stereo=="rightleft"){hints.stereo=1;hints.swap=stereo=="rightleft";}
+                else if(stereo=="topbottom" || stereo=="bottomtop"){hints.stereo=2;hints.swap=stereo=="bottomtop";}
+            }
+            auto projection=normal(tag(stream->metadata,"projection"));if(projection.empty())projection=normal(tag(stream->metadata,"projection_type"));
+            if(!hints.projection && !hints.unsupported_projection){
+                if(projection=="equirectangular" || projection=="360" || projection=="vr360")hints.projection=2;
+                else if(projection=="180" || projection=="vr180" || projection=="halfequirectangular")hints.projection=1;
+                else if(projection=="rectilinear" || projection=="flat")hints.projection=0;
+                else if(!projection.empty())hints.unsupported_projection=true;
+            }
+        }
         next->tracks.push_back(std::move(track));
     }
     for(unsigned i=0;i<next->format->nb_chapters && i<10000;++i){

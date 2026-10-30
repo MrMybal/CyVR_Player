@@ -1,6 +1,7 @@
 #include "cyvr/player/android/video_renderer.hpp"
 #include "cyvr/player/gpu_timer.hpp"
 #include "cyvr/player/image_processor.hpp"
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <unistd.h>
@@ -41,11 +42,14 @@ struct VideoRenderer::Impl {
   VkFormat format;
   GpuTimer timer;
   std::optional<double> last_gpu_ms;
+  VideoRenderTimings timings;
   VkRenderPass pass{};
   VkCommandPool pool{};
   VkCommandBuffer command{};
   VkFence fence{};
   VkShaderModule vertex{}, fragment{};
+  VkPipelineCache pipeline_cache{};
+  PFN_vkDestroyPipelineCache destroy_pipeline_cache{};
   PFN_vkGetAndroidHardwareBufferPropertiesANDROID properties{};
   PFN_vkCreateSamplerYcbcrConversion create_conversion{};
   PFN_vkDestroySamplerYcbcrConversion destroy_conversion{};
@@ -64,6 +68,7 @@ struct VideoRenderer::Impl {
     VkPipelineLayout pipeline_layout{};
     VkPipeline pipeline{};
     std::uint32_t width{}, height{};
+    std::uint64_t last_use{};
   };
   struct Output {
     VkImageView view{};
@@ -72,6 +77,7 @@ struct VideoRenderer::Impl {
   std::map<AHardwareBuffer *, Imported> imported;
   std::map<VkImage, Output> outputs;
   std::uint64_t count{}, epoch{};
+  std::uint64_t import_use{};
   std::unique_ptr<ImageProcessor> processor;
   VideoExtent processor_input{}, processor_output{};
   int processor_quality{-1};
@@ -98,6 +104,16 @@ struct VideoRenderer::Impl {
         reinterpret_cast<PFN_vkDestroySemaphore>(get("vkDestroySemaphore"));
     import_fence = reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(
         get("vkImportSemaphoreFdKHR"));
+    const auto create_pipeline_cache =
+        reinterpret_cast<PFN_vkCreatePipelineCache>(
+            get("vkCreatePipelineCache"));
+    destroy_pipeline_cache = reinterpret_cast<PFN_vkDestroyPipelineCache>(
+        get("vkDestroyPipelineCache"));
+    VkPipelineCacheCreateInfo cache_info{
+        VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    vkCheck(create_pipeline_cache(gpu.device, &cache_info, nullptr,
+                                  &pipeline_cache),
+            "video pipeline cache");
     VkAttachmentDescription attachment{};
     attachment.format = format;
     attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -147,24 +163,27 @@ struct VideoRenderer::Impl {
     shader("video.vert.spv", vertex);
     shader("video.frag.spv", fragment);
   }
+  void destroy_import(Imported &i) {
+    vkDestroyPipeline(gpu.device, i.pipeline, nullptr);
+    vkDestroyPipelineLayout(gpu.device, i.pipeline_layout, nullptr);
+    vkDestroyDescriptorPool(gpu.device, i.pool, nullptr);
+    vkDestroyDescriptorSetLayout(gpu.device, i.layout, nullptr);
+    vkDestroyImageView(gpu.device, i.view, nullptr);
+    vkDestroySampler(gpu.device, i.sampler, nullptr);
+    destroy_conversion(gpu.device, i.conversion, nullptr);
+    vkDestroyImage(gpu.device, i.image, nullptr);
+    vkFreeMemory(gpu.device, i.memory, nullptr);
+  }
   void clear_imports() {
-    for (auto &pair : imported) {
-      auto &i = pair.second;
-      vkDestroyPipeline(gpu.device, i.pipeline, nullptr);
-      vkDestroyPipelineLayout(gpu.device, i.pipeline_layout, nullptr);
-      vkDestroyDescriptorPool(gpu.device, i.pool, nullptr);
-      vkDestroyDescriptorSetLayout(gpu.device, i.layout, nullptr);
-      vkDestroyImageView(gpu.device, i.view, nullptr);
-      vkDestroySampler(gpu.device, i.sampler, nullptr);
-      destroy_conversion(gpu.device, i.conversion, nullptr);
-      vkDestroyImage(gpu.device, i.image, nullptr);
-      vkFreeMemory(gpu.device, i.memory, nullptr);
-    }
+    for (auto &pair : imported)
+      destroy_import(pair.second);
     imported.clear();
   }
   ~Impl() {
     vkDeviceWaitIdle(gpu.device);
     clear_imports();
+    if (pipeline_cache)
+      destroy_pipeline_cache(gpu.device, pipeline_cache, nullptr);
     for (auto &pair : outputs) {
       vkDestroyFramebuffer(gpu.device, pair.second.framebuffer, nullptr);
       vkDestroyImageView(gpu.device, pair.second.view, nullptr);
@@ -177,11 +196,27 @@ struct VideoRenderer::Impl {
   }
   Imported &import(AHardwareBuffer *buffer) {
     auto found = imported.find(buffer);
-    if (found != imported.end())
+    if (found != imported.end()) {
+      found->second.last_use = ++import_use;
       return found->second;
-    if (imported.size() >= 12)
-      clear_imports();
+    }
+    ++timings.imports;
+    // Decoder buffer pools can exceed twelve images. Flushing the complete
+    // working set made every subsequent image compile its pipeline again.
+    // Retain a bounded working set and evict only its least-recently-used
+    // entry. convert() has completed the previous GPU read before reaching this
+    // point.
+    if (imported.size() >= 64) {
+      const auto oldest = std::min_element(
+          imported.begin(), imported.end(), [](const auto &a, const auto &b) {
+            return a.second.last_use < b.second.last_use;
+          });
+      destroy_import(oldest->second);
+      imported.erase(oldest);
+      ++timings.cache_evictions;
+    }
     auto &out = imported[buffer];
+    out.last_use = ++import_use;
     AHardwareBuffer_Desc desc{};
     AHardwareBuffer_describe(buffer, &desc);
     out.width = desc.width;
@@ -241,10 +276,13 @@ struct VideoRenderer::Impl {
     conversion.xChromaOffset = fmt.suggestedXChromaOffset;
     conversion.yChromaOffset = fmt.suggestedYChromaOffset;
     conversion.chromaFilter = VK_FILTER_NEAREST;
-    const bool rgb=fmt.format==VK_FORMAT_R8G8B8A8_UNORM || fmt.format==VK_FORMAT_A2B10G10R10_UNORM_PACK32 || fmt.format==VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-    if(!rgb)vkCheck(
-        create_conversion(gpu.device, &conversion, nullptr, &out.conversion),
-        "AHB YCbCr conversion");
+    const bool rgb = fmt.format == VK_FORMAT_R8G8B8A8_UNORM ||
+                     fmt.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+                     fmt.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    if (!rgb)
+      vkCheck(
+          create_conversion(gpu.device, &conversion, nullptr, &out.conversion),
+          "AHB YCbCr conversion");
     VkSamplerYcbcrConversionInfo converted{
         VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO};
     converted.conversion = out.conversion;
@@ -359,7 +397,7 @@ struct VideoRenderer::Impl {
     pipeline.pDynamicState = &dynamic;
     pipeline.layout = out.pipeline_layout;
     pipeline.renderPass = pass;
-    vkCheck(vkCreateGraphicsPipelines(gpu.device, VK_NULL_HANDLE, 1, &pipeline,
+    vkCheck(vkCreateGraphicsPipelines(gpu.device, pipeline_cache, 1, &pipeline,
                                       nullptr, &out.pipeline),
             "video pipeline");
     return out;
@@ -369,13 +407,21 @@ struct VideoRenderer::Impl {
                const ImageSettings &settings, int stereo,
                const VideoView &mapping = {},
                const std::function<void(VkCommandBuffer)> &finish = {}) {
+    const auto started = std::chrono::steady_clock::now();
     vkCheck(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, 5'000'000'000ull),
             "video completion");
     if (epoch != lease.epoch) {
+      if (!imported.empty())
+        ++timings.cache_resets;
       clear_imports();
       epoch = lease.epoch;
     }
+    const auto import_start = std::chrono::steady_clock::now();
     auto &source = import(lease.hardware_buffer());
+    timings.import_ms = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - import_start)
+                            .count();
+    timings.cached_images = imported.size();
     auto &output = outputs[target];
     if (!output.view) {
       VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -501,17 +547,25 @@ struct VideoRenderer::Impl {
     vkCheck(vkResetFences(gpu.device, 1, &fence), "video reset fence");
     vkCheck(vkQueueSubmit(gpu.queue, 1, &submit, fence), "video submit");
     pending_read.submitted = true;
+    const auto completion_start = std::chrono::steady_clock::now();
     // Initial conservative synchronization: retain AImage until every GPU read
     // finishes and before xrReleaseSwapchainImage. No CPU pixel access.
     vkCheck(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, 5'000'000'000ull),
             "video release completion");
     pending_read.submitted = false;
+    timings.completion_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - completion_start)
+            .count();
     last_gpu_ms = timer.result();
     if (sync.backup >= 0) {
       ::close(sync.backup);
       sync.backup = -1;
     }
     ++count;
+    timings.total_ms = std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - started)
+                           .count();
   }
   void draw(VkImage target, VideoExtent input, VideoExtent output,
             android::ImageLease &lease, const ImageSettings &settings,
@@ -613,4 +667,5 @@ namespace cyvr::player {
 std::optional<double> VideoRenderer::gpu_ms() const {
   return impl_->last_gpu_ms;
 }
+VideoRenderTimings VideoRenderer::timings() const { return impl_->timings; }
 } // namespace cyvr::player

@@ -182,5 +182,12 @@
   "Edge sample inset": "Décalage des couleurs",
   "Reset Ambilight": "Réinitialiser l’Ambilight",
   "A soft video-coloured glow follows the flat or curved cinema screen.": "Un halo aux couleurs du film suit l’écran plat ou courbé.",
-  "Ambilight could not be rendered. Toggle it to retry.": "Impossible d’afficher l’Ambilight. Désactivez puis réactivez l’option."
+  "Ambilight could not be rendered. Toggle it to retry.": "Impossible d’afficher l’Ambilight. Désactivez puis réactivez l’option.",
+  "Detect video format": "Détecter le format vidéo",
+  "Manual video format": "Format vidéo manuel",
+  "Projection not recognised; select the format manually.": "Projection non reconnue : choisissez le format manuellement.",
+  "Automatic format: decoded stereo views": "Format automatique : vues stéréo décodées",
+  "Automatic format: video metadata": "Format automatique : métadonnées de la vidéo",
+  "Automatic format: filename hints": "Format automatique : indications du nom de fichier",
+  "Automatic format: standard 2D": "Format automatique : vidéo 2D classique"
 }

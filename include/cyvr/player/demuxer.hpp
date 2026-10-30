@@ -1,5 +1,6 @@
 #pragma once
 #include "cyvr/player/source.hpp"
+#include "cyvr/player/video_layout.hpp"
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -19,6 +20,7 @@ struct TrackInfo {
     double nominal_fps{};
     bool default_track{}, forced{}, attached_picture{}, hearing_impaired{}, visual_impaired{};
     int companion_video{-1};
+    VideoLayoutHints layout;
 };
 struct ChapterInfo { std::int64_t start_us{}, end_us{}; std::string title; };
 struct FontAttachment { std::string name; std::vector<std::uint8_t> data; };

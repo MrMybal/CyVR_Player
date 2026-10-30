@@ -99,6 +99,7 @@ bool save_application_state(const std::string &path,
     c.put(std::uint64_t(0x414d4231));auto ambilight=s.ambilight;ambilight.sanitize();
     c.put((ambilight.enabled?1:0)|(ambilight.auto_bars?2:0));
     for(float value:{ambilight.intensity,ambilight.spread,ambilight.smoothing,ambilight.saturation,ambilight.inset}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
+    c.put(std::uint64_t(0x464d5431));c.put(s.format_manual?1:0);
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -198,6 +199,7 @@ load_application_state(const std::string &path) noexcept {
             if(c.get()!=0x414d4231)return {};const auto flags=c.get();s.ambilight.enabled=flags&1;s.ambilight.auto_bars=flags&2;
             for(float* value:{&s.ambilight.intensity,&s.ambilight.spread,&s.ambilight.smoothing,&s.ambilight.saturation,&s.ambilight.inset}){const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);}
             s.ambilight.sanitize();
+            if(c.cursor<c.bytes.size()){if(c.get()!=0x464d5431)return {};s.format_manual=c.get()!=0;}
           }
         }
       }

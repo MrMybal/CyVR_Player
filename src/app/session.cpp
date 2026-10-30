@@ -30,7 +30,7 @@ struct PlayerSession::Impl {
   std::int64_t seek_pending{-1};
   std::int64_t requested_start{};
   bool requested_autoplay{true}, pause_after_first{};
-  std::uint64_t epoch_counter{};
+  std::uint64_t epoch_counter{},open_id{};
   std::string location, title;
   PlayerState state;
   TrackSelection requested_selection,active_selection;
@@ -111,6 +111,7 @@ struct PlayerSession::Impl {
         audio.reset();audio_pending.reset();audio_stream=-1;
 #endif
         state = PlayerState{state.revision + 1};
+        state.media_id=open_id;
         state.status = "Opening media...";
         counters={};decoded_rate.reset();submitted_rate.reset();unique_submissions.reset();
         state.title = name;
@@ -166,7 +167,7 @@ struct PlayerSession::Impl {
             if(valid_track(active_selection.subtitle,TrackKind::subtitle))s.subtitle_track=active_selection.subtitle;
             else for(const auto& t:s.tracks)if(t.kind==TrackKind::subtitle && (t.forced || (t.default_track && s.subtitle_track<0)))s.subtitle_track=t.index;
           }
-          for(const auto& track:s.tracks)if(track.index==video)s.nominal_fps=track.nominal_fps;
+          for(const auto& track:s.tracks)if(track.index==video){s.nominal_fps=track.nominal_fps;s.layout=track.layout;}
           s.duration_us = input.duration_us().value_or(0);
           s.width = parameters.width;
           s.height = parameters.height;
@@ -710,7 +711,7 @@ SubtitleSnapshot PlayerSession::subtitles()const{
   }
   return timeline?timeline->at(position):SubtitleSnapshot{};
 }
-void PlayerSession::open(std::string location, std::string title,
+std::uint64_t PlayerSession::open(std::string location, std::string title,
                          std::int64_t start_us, bool autoplay,TrackSelection selection) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->cancellation->cancel();
@@ -722,6 +723,7 @@ void PlayerSession::open(std::string location, std::string title,
   impl_->requested_start = std::max<std::int64_t>(0, start_us);
   impl_->requested_autoplay = autoplay;
   impl_->requested_selection=std::move(selection);
+  ++impl_->open_id;
   impl_->open_pending = true;
   impl_->stop_pending = false;
   impl_->wake.notify_all();
@@ -729,6 +731,7 @@ void PlayerSession::open(std::string location, std::string title,
   impl_->clock_started = false;
   impl_->frames.clear();
 #endif
+  return impl_->open_id;
 }
 void PlayerSession::stop() {
   std::lock_guard<std::mutex> lock(impl_->mutex);

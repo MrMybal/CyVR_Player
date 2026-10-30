@@ -78,3 +78,9 @@ Ambilight is optional and off by default. A separate hardware-buffer conversion/
 Capture and halo updates are bounded to 30 Hz. A paused image needs no recapture unless its corrections/packing change; the temporal history settles for five time constants. Disabled Ambilight issues neither capture nor glow draws. No video pixels are read back by the runtime path. Optional resources are cached until host/device teardown. GPU capture and glow timings have separate technical logs and are excluded from the video-performance HUD. Test-only readback validates the actual shader output on PC and Adreno.
 
 The effect is a composited colour surround, not physical room illumination. It applies to planar/curved cinema movies, not VR180/360 or Gaussian scenes. Automatic bar detection may misclassify very dark picture edges; disable it or adjust inset when needed. Tiny diagnostic timings do not qualify total playback throughput or thermals.
+
+## 0.4.8 decoded-image cache
+
+Some decoder output pools contain more than twelve hardware buffers. The previous importer cleared its complete cache at that threshold and recreated a shader pipeline for every subsequent image. The importer now retains up to 64 images, evicts only the least recently used entry, and reuses a Vulkan pipeline compilation cache. Epoch changes still discard old imported images; no video downscale, filter substitution or decoder/frame-rate cap is introduced. Native, CAS, FSR, GSR and Ambilight's capture use the same importer. Optional stage diagnostics separate import/compilation, GPU completion, native compositor acquisition and host CPU work.
+
+The `cyvr_video_cache_probe` Android tool exercises distinct original RGBA hardware buffers, verifies image pixels, and checks generation invalidation and the 64-entry bound. Cache timings describe this diagnostic workload and do not establish full application FPS. `cyvr_video_gpu_probe` separately exercises actual MediaCodec/video-clock playback.

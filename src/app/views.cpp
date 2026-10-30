@@ -364,10 +364,13 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       button(d, 1331, {36, 758, 215, 60}, "Zoom out");
       button(d, 1332, {267, 758, 215, 60}, "Zoom in");
       button(d, 1333, {498, 758, 250, 60}, "Fit image");
-      d.text(36, 847, 21, tr("Left stick: seek 10 s / Right stick: zoom"),
+      button(d,1053,{770,758,634,60},"Detect video format");
+      const char* detection=format_manual_?"Manual video format":detected_layout_.ambiguous?"Projection not recognised; select the format manually.":detected_layout_.evidence==3?"Automatic format: decoded stereo views":detected_layout_.evidence==2?"Automatic format: video metadata":detected_layout_.evidence==1?"Automatic format: filename hints":"Automatic format: standard 2D";
+      d.text(36,837,18,tr(detection),accent);
+      d.text(36, 872, 20, tr("Left stick: seek 10 s / Right stick: zoom"),
              muted);
       if (immersive)
-        d.text(36, 884, 20,
+        d.text(36, 905, 17,
                tr("Move the controls freely; the video stays in place."),
                muted);
     } else if (display_tab_ == 1) {

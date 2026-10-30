@@ -32,7 +32,7 @@ struct Platform {
   std::function<void()> cancel_documents;
 };
 struct PlayerState {
-  std::uint64_t revision{};
+  std::uint64_t revision{},media_id{};
   std::string status{"Choose a video."}, title, codec;
   std::vector<TrackInfo> tracks;
   std::vector<ChapterInfo> chapters;
@@ -45,6 +45,7 @@ struct PlayerState {
   bool ready{}, playing{}, seekable{}, ended{};
   bool volumetric{};
   bool multiview{};
+  VideoLayoutHints layout;
   std::string audio_status,subtitle_status;
 };
 // One serialized media worker. UI, filesystem and network never share a lock
@@ -54,7 +55,7 @@ class PlayerSession {
 public:
   explicit PlayerSession(Platform platform);
   ~PlayerSession();
-  void open(std::string location, std::string title, std::int64_t start_us = 0,
+  std::uint64_t open(std::string location, std::string title, std::int64_t start_us = 0,
             bool autoplay = true, TrackSelection selection = {});
   bool select_track(TrackKind,int index);
   bool external_subtitle(std::string location);
@@ -135,6 +136,11 @@ private:
   int page_{}, offset_{};
   int display_tab_{};
   int cinema_tab_{};
+  bool format_manual_{};
+  std::uint64_t format_media_id_{};
+  int format_track_{-1};
+  DetectedVideoLayout detected_layout_;
+  void refresh_video_format();
   bool zoom_gesture_[2]{}, stick_latched_[2]{};
   PlaybackControls controls_;
   std::vector<BrowserItem> playlist_;

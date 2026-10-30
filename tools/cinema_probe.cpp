@@ -111,6 +111,11 @@ int main(int argc, char **argv) {
       out<<"P6\n1440 990\n255\n";for(std::size_t i=0;i<pixels.size();i+=4)out.write(reinterpret_cast<const char*>(pixels.data()+i),3);
       renderer.destroyTarget(target);
     }
+    app.action(1300);
+    for(const auto language:{"en","fr"}){
+      ui.setLanguage(language);DrawList format;ui.drawMain(format);auto target=renderer.createTarget(1440,990);renderer.draw(target,format);const auto pixels=renderer.readback(target);
+      std::ofstream out(std::string(argv[3])+".format-"+language+".ppm",std::ios::binary);out<<"P6\n1440 990\n255\n";for(std::size_t i=0;i<pixels.size();i+=4)out.write(reinterpret_cast<const char*>(pixels.data()+i),3);renderer.destroyTarget(target);
+    }
     std::cout << "Cinema Vulkan: 1920x1080 and 1600x1100, source aspect "
                  "preserved, video only, "
                  "wake consumed\n";

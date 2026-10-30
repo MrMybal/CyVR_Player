@@ -63,6 +63,8 @@ class Renderer final : public Base {
   bool upload_thumbnails_{true};
   std::uint64_t failed_request_{UINT64_MAX};
   double last_report_{};
+  TimeSamples native_acquire_,video_import_,video_completion_,host_cpu_;
+  double native_acquire_last_{};
   std::uint64_t measured_epoch_{UINT64_MAX}, measured_request_{UINT64_MAX};
   std::unique_ptr<SubtitleRasterizer> captions_;
   std::unique_ptr<VulkanRenderer> caption_renderer_;
@@ -226,7 +228,8 @@ public:
     auto state = app->session().state();
     return state.playing || (state.ready && !app->preview_ready) ? 8 : 33;
   }
-  void frameSubmitted(UiModel &) override {
+  void frameSubmitted(UiModel &ui) override {
+    host_cpu_.add(ui.stats.cpuMs);
     if (auto app = application_()) {
       const double now =
           std::chrono::duration<double>(
@@ -237,6 +240,10 @@ public:
       if (now - last_report_ >= 2.) {
         last_report_ = now;
         const auto video = app->session().metrics();
+        const auto timing=video_?video_->timings():VideoRenderTimings{};
+        __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","PERF_STAGES host_cpu_ms=%.3f video_wall_ms=%.3f native_acquire_ms=%.3f import_ms=%.3f completion_ms=%.3f imports=%llu cache_resets=%llu cache_evictions=%llu cached=%zu quality=%d upscale=%d environment=%d ambilight=%d hidden=%d compact=%d",
+          host_cpu_.mean().value_or(-1),app->render_monitor.work.mean().value_or(-1),native_acquire_.mean().value_or(-1),video_import_.mean().value_or(-1),video_completion_.mean().value_or(-1),
+          static_cast<unsigned long long>(timing.imports),static_cast<unsigned long long>(timing.cache_resets),static_cast<unsigned long long>(timing.cache_evictions),timing.cached_images,app->image.quality,app->image.upscale,app->cinema.environment,int(app->ambilight.enabled),int(ui.interfaceHidden),int(ui.compactInterface));
         __android_log_print(
             ANDROID_LOG_INFO, "CyVRPlayer",
             "PERFORMANCE app_submissions_s=%.2f video_gpu_s=%.2f "
@@ -372,11 +379,13 @@ public:
         uint32_t index{};
         XrSwapchainImageAcquireInfo acquire{
             XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        const auto acquire_start=std::chrono::steady_clock::now();
         xrCheck(xrAcquireSwapchainImage(swapchain_, &acquire, &index),
                 "acquire native video");
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         wait.timeout = XR_INFINITE_DURATION;
         xrCheck(xrWaitSwapchainImage(swapchain_, &wait), "wait native video");
+        native_acquire_last_=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-acquire_start).count();native_acquire_.add(native_acquire_last_);
         try {
           video_->draw_retained(images_.at(index),
                                 {uint32_t(state.width), uint32_t(state.height)},
@@ -431,6 +440,7 @@ public:
       initialized_ = true;
       ++frames_;
       record_video(*app, before, video_->gpu_ms());
+      video_import_.add(video_->timings().import_ms);video_completion_.add(video_->timings().completion_ms);
       if (frames_ == 1 || frames_ % 24 == 0)
         __android_log_print(
             ANDROID_LOG_INFO, "CyVRPlayer",
