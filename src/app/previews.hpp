@@ -11,16 +11,17 @@ struct PlayerApplication::PreviewWorker {
   std::condition_variable wake;
   std::vector<std::string> requests;
   std::map<std::string, std::vector<std::uint8_t>> cache;
+  std::map<std::string, unsigned> failures;
   std::vector<std::string> lru;
   std::vector<std::uint8_t> atlas;
   std::array<bool, 7> present{};
   std::uint64_t revision{}, generation{};
-  bool pending{}, quit{};
+  bool pending{}, quit{}, reset_failures{},invalidate_cache{};
   std::shared_ptr<Cancellation> cancellation = std::make_shared<Cancellation>();
   std::thread worker;
   explicit PreviewWorker(Platform);
   ~PreviewWorker();
-  void request(std::vector<std::string>);
+  void request(std::vector<std::string>,bool refresh=false);
   void run();
 };
 } // namespace cyvr::player

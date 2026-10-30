@@ -33,7 +33,7 @@ struct AudioPlayback::Impl {
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
   }
   static void error(AAudioStream*,void* owner,aaudio_result_t){static_cast<Impl*>(owner)->failed.store(true);}
-  Impl(const Demuxer& source,int stream_index,std::int64_t start):input(source),track(stream_index),decoder(source,stream_index,1),base_us(start){
+  Impl(const Demuxer& source,int stream_index,std::int64_t start,float volume):queue(volume),input(source),track(stream_index),decoder(source,stream_index,1),base_us(start){
     AAudioStreamBuilder* builder{};
     if(AAudio_createStreamBuilder(&builder)!=AAUDIO_OK)throw MediaError("Cannot create native audio output");
     AAudioStreamBuilder_setDirection(builder,AAUDIO_DIRECTION_OUTPUT);
@@ -108,7 +108,8 @@ struct AudioPlayback::Impl {
     }
   }
 };
-AudioPlayback::AudioPlayback(const Demuxer& source,int stream,std::int64_t start):impl_(std::make_unique<Impl>(source,stream,start)){}
+AudioPlayback::AudioPlayback(const Demuxer& source,int stream,std::int64_t start,float volume):impl_(std::make_unique<Impl>(source,stream,start,volume)){}
+void AudioPlayback::volume(float value){impl_->queue.set_gain(value);}
 AudioPlayback::~AudioPlayback()=default;
 void AudioPlayback::pump(){impl_->pump();}
 bool AudioPlayback::send(const AVPacket* packet){impl_->pump();return impl_->pending.samples.empty() && impl_->decoder.send(packet);}

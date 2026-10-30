@@ -7,7 +7,8 @@ struct AudioPlaybackStats {
 };
 class AudioPlayback {
 public:
-  AudioPlayback(const Demuxer&,int stream,std::int64_t start_us);
+  AudioPlayback(const Demuxer&,int stream,std::int64_t start_us,float volume=1);
+  void volume(float);
   ~AudioPlayback();
   bool send(const AVPacket*);
   void pump();

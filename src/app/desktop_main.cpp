@@ -215,12 +215,12 @@ int main(int argc, char **argv) {
                 page = std::stoi(argv[++i]);
             else if (arg == "--language" && i + 1 < argc)
                 language = argv[++i];
-            else if(arg=="--display-tab"&&i+1<argc)displayTab=std::clamp(std::stoi(argv[++i]),0,2);
+            else if(arg=="--display-tab"&&i+1<argc)displayTab=std::clamp(std::stoi(argv[++i]),0,4);
         }
         Desktop desktop;
         desktop.initialize(assets, root);
         desktop.ui.setLanguage(language);
-        desktop.app->action(1000 + std::clamp(page, 0, 3));
+        desktop.app->action(1000 + std::clamp(page, 0, 4));
         desktop.app->action(1300+displayTab);
         if (!source.empty())
             desktop.app->open(source);

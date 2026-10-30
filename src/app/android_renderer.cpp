@@ -78,12 +78,13 @@ class Renderer final : public Base {
 #if CYVR_ENABLE_IMMERSIVE
   AndroidXrContext xr_{};
   VideoPlacement video_placement_;
-  XrSpace video_space_{};
+  XrSpace video_space_{},stable_space_{};
   std::uint64_t placed_request_{UINT64_MAX};
   struct SpaceChange {
     XrTime time;
     bool valid;
     Pose new_in_previous;
+    XrSpace space;
   };
   std::deque<SpaceChange> space_changes_;
   struct EyeTarget {
@@ -202,6 +203,9 @@ public:
       uiRenderer_ = nullptr;
       return;
     }
+#if CYVR_ENABLE_IMMERSIVE
+    if(stable_space_){xrDestroySpace(stable_space_);stable_space_=XR_NULL_HANDLE;}
+#endif
     if (!gpu_)
       return;
     vkDeviceWaitIdle(gpu_->device);
@@ -473,6 +477,9 @@ public:
   std::vector<const char*> optionalInstanceExtensions()const override{return {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME};}
   void xrReady(const AndroidXrContext &context) override {
     xr_ = context;
+    XrReferenceSpaceCreateInfo room{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};room.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_STAGE;room.poseInReferenceSpace.orientation.w=1;
+    if(XR_FAILED(xrCreateReferenceSpace(xr_.session,&room,&stable_space_)))stable_space_=XR_NULL_HANDLE;
+    __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","VIDEO_ROOM_SPACE available=%d",int(stable_space_!=XR_NULL_HANDLE));
     cylinder_enabled_=std::find(context.enabledApplicationExtensions.begin(),context.enabledApplicationExtensions.end(),XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME)!=context.enabledApplicationExtensions.end();
     __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","CINEMA_CAPABILITIES native_cylinder=%d",int(cylinder_enabled_));
     video_placement_.reset();
@@ -500,12 +507,13 @@ public:
   }
   void referenceSpaceChanging(
       const XrEventDataReferenceSpaceChangePending &change) override {
-    if (change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL &&
-        video_placement_.placed() && video_space_ == xr_.local)
+    if (video_placement_.placed() &&
+        ((change.referenceSpaceType==XR_REFERENCE_SPACE_TYPE_LOCAL && video_space_==xr_.local) ||
+         (change.referenceSpaceType==XR_REFERENCE_SPACE_TYPE_STAGE && video_space_==stable_space_)))
       space_changes_.push_back({change.changeTime, bool(change.poseValid),
                                 change.poseValid
                                     ? pose_from_xr(change.poseInPreviousSpace)
-                                    : Pose {}});
+                                    : Pose {},video_space_});
   }
   uint32_t compositionLayers(const AndroidXrFrame &frame,
                               const XrCompositionLayerBaseHeader **output,
@@ -526,8 +534,8 @@ public:
     }else if(!app || !app->ambilight.enabled){ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;}
     if(app && caption_visible_ && caption_swapchain_ && count<capacity && video_placement_.placed()){
       const auto media=app->session().state();
-      auto pose=video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema);
-      if(app->projection)pose=video_placement_.screen(ImageSettings{});
+      auto pose=video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema,app->scene);
+      if(app->projection)pose=video_placement_.screen(ImageSettings{},CinemaSettings{},app->scene.rotation_only());
       pose.position=pose.position+rotate(pose.orientation,{0,0,.01f});
       auto& q=caption_quad_;q={XR_TYPE_COMPOSITION_LAYER_QUAD};q.space=video_space_;
       q.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
@@ -540,7 +548,7 @@ public:
         auto& cylinder=caption_cylinder_;cylinder={XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
         cylinder.space=q.space;cylinder.layerFlags=q.layerFlags;cylinder.eyeVisibility=q.eyeVisibility;cylinder.subImage=q.subImage;
         const auto radius=app->cinema.radius(app->image.zoom);
-        const auto middle=video_placement_.screen(app->image,app->cinema);
+        const auto middle=video_placement_.screen(app->image,app->cinema,app->scene);
         const auto center=cylinder_center(middle,radius);
         cylinder.pose={{center.orientation.x,center.orientation.y,center.orientation.z,center.orientation.w},{center.position.x,center.position.y,center.position.z}};
         cylinder.radius=std::max(.01f,radius-.01f);cylinder.centralAngle=app->cinema.angle();cylinder.aspectRatio=float(caption_width_)/caption_height_;
@@ -598,7 +606,7 @@ public:
         rect.extent.height /= 2;
         rect.offset.y = packed * rect.extent.height;
       }
-      const auto pose = video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema);
+      const auto pose = video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema,app->scene);
       const auto p = pose.position;
       const auto r = pose.orientation;
       q.pose = {{r.x, r.y, r.z, r.w}, { p.x, p.y, p.z }};
@@ -701,7 +709,7 @@ private:
       if(time-ambilight_report_>=5){ambilight_report_=time;const auto captureMs=capture?ambilight_capture_->gpu_ms():std::optional<double>(0);
         const auto glowMs=ambilight_->gpu_ms();__android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","AMBILIGHT capture=64x36 glow=128x128 capture_gpu_ms=%.3f glow_gpu_ms=%.3f curve=%.2f",captureMs.value_or(-1),glowMs.value_or(-1),app.cinema.curvature);}
     }
-    const auto middle=video_placement_.screen(app.image,app.cinema);
+    const auto middle=video_placement_.screen(app.image,app.cinema,app.scene);
     const float width=app.cinema.width*app.image.zoom,outerW=width*(1+2*app.ambilight.spread),outerH=width/aspect+2*width*app.ambilight.spread;
     auto pose=middle;pose.position=pose.position+rotate(pose.orientation,{0,0,-.02f});
     auto& quad=ambilight_quad_;quad={XR_TYPE_COMPOSITION_LAYER_QUAD};quad.space=video_space_;
@@ -751,7 +759,7 @@ private:
     const VideoExtent native{std::max(eye_extents_[0].width,eye_extents_[1].width),std::max(eye_extents_[0].height,eye_extents_[1].height)};const auto plan=view_processing_plan(native,native,app.image);
     if(std::any_of(gaussian_eyes_.begin(),gaussian_eyes_.end(),[&](const auto& eye){return !eye.swapchain || eye.extent.width!=plan.output.width || eye.extent.height!=plan.output.height;})){vkDeviceWaitIdle(gpu_->device);destroy_splats();}
     if(!splat_renderer_)splat_renderer_=std::make_unique<SplatRenderer>(*gpu_,format_,assets_);
-    const auto model=video_placement_.screen(app.image);const auto inverse=inverse_rotation(model.orientation);
+    const auto model=video_placement_.screen(app.image,CinemaSettings{},app.scene);const auto inverse=inverse_rotation(model.orientation);
     for(int n=0;n<2;++n){auto& eye=gaussian_eyes_[n];
       if(!eye.swapchain || eye.extent.width!=plan.output.width || eye.extent.height!=plan.output.height){
         vkDeviceWaitIdle(gpu_->device);if(eye.swapchain)xrDestroySwapchain(eye.swapchain);eye={};
@@ -868,21 +876,22 @@ private:
            space_changes_.front().time <= frame.displayTime) {
       const auto change = space_changes_.front();
       space_changes_.pop_front();
-      if (video_space_ == xr_.local && change.valid)
-        video_placement_.transform(inverse_pose(change.new_in_previous));
+      if(app.scene.stable && change.space==video_space_){
+        if(change.valid)video_placement_.transform(inverse_pose(change.new_in_previous));
+        else last_ui().setToast(std::string(player_translate(last_ui().settings.language,"Tracking origin changed; adjust video placement if needed.")));
+      }
     }
     const XrSpace preferred =
-        frame.panelSpace == xr_.view ? xr_.view : xr_.local;
+        frame.panelSpace==xr_.view?xr_.view:(app.scene.stable && stable_space_?stable_space_:xr_.local);
     constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                            XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-    if (video_placement_.placed() && video_space_ == xr_.view &&
-        preferred == xr_.local) {
+    if (video_placement_.placed() && video_space_!=preferred && preferred!=xr_.view) {
       XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
-      if (XR_SUCCEEDED(xrLocateSpace(xr_.view, xr_.local, frame.displayTime,
+      if (XR_SUCCEEDED(xrLocateSpace(video_space_, preferred, frame.displayTime,
                                      &location)) &&
           (location.locationFlags & valid) == valid) {
         video_placement_.transform(pose_from_xr(location.pose));
-        video_space_ = xr_.local;
+        video_space_ = preferred;
       }
     }
     if (!video_placement_.placed() ||
@@ -896,13 +905,13 @@ private:
           return video_placement_.placed();
         head = pose_from_xr(location.pose);
       }
-      video_placement_.place(head, last_ui().settings.distance);
+      video_placement_.place(head, last_ui().settings.distance,app.video_placement_request!=0);
       video_space_ = preferred;
       placed_request_ = app.video_placement_request;
       __android_log_print(
           ANDROID_LOG_INFO, "CyVRPlayer",
           "VIDEO_PLACED independent_panel=1 space=%s request=%llu",
-          video_space_ == xr_.view ? "view" : "local",
+          video_space_ == xr_.view ? "view" : video_space_==stable_space_?"room":"local",
           static_cast<unsigned long long>(placed_request_));
     }
     return video_placement_.placed();
@@ -998,7 +1007,7 @@ private:
           view.fov.angleUp <= view.fov.angleDown)
         return 0;
     const auto media = app.session().state();
-    const auto videoPose = video_placement_.screen(app.image,app.projection?CinemaSettings{}:app.cinema);
+    const auto videoPose = video_placement_.screen(app.image,app.projection?CinemaSettings{}:app.cinema,app.scene);
     const auto videoPosition = videoPose.position;
     const auto inverse = inverse_rotation(videoPose.orientation);
     const double par = app.half_stereo && app.stereo

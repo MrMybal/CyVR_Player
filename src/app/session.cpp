@@ -27,6 +27,7 @@ struct PlayerSession::Impl {
   std::condition_variable wake;
   std::thread worker;
   bool quit{}, open_pending{}, paused{}, stop_pending{};
+  std::atomic<float> volume{1};
   std::int64_t seek_pending{-1};
   std::int64_t requested_start{};
   bool requested_autoplay{true}, pause_after_first{};
@@ -255,9 +256,10 @@ struct PlayerSession::Impl {
   void begin_audio(Demuxer& input,std::int64_t start_us){
     int next;{std::lock_guard<std::mutex> lock(mutex);next=state.audio_track;}
     std::shared_ptr<android::AudioPlayback> output;
-    if(next>=0){try{output=std::make_shared<android::AudioPlayback>(input,next,start_us);}catch(const std::exception& e){publish([&](PlayerState& s){s.audio_status=e.what();s.audio_track=-1;});next=-1;}}
+    if(next>=0){try{output=std::make_shared<android::AudioPlayback>(input,next,start_us,volume.load());}catch(const std::exception& e){publish([&](PlayerState& s){s.audio_status=e.what();s.audio_track=-1;});next=-1;}}
     std::lock_guard<std::mutex> lock(mutex);
     audio=std::move(output);audio_stream=next;audio_pending.reset();audio_eos=false;
+    if(audio)audio->volume(volume.load());
     video_lookahead.clear();lookahead_bytes=0;demux_end=false;
   }
   void begin_subtitles(Demuxer& input,const std::shared_ptr<Cancellation>& cancel){
@@ -765,6 +767,12 @@ void PlayerSession::stop() {
   impl_->clock_started = false;
 #endif
   impl_->wake.notify_all();
+}
+void PlayerSession::volume(float value){
+  value=std::isfinite(value)?std::clamp(value,0.f,1.f):1.f;impl_->volume.store(value);
+#ifdef __ANDROID__
+  std::lock_guard<std::mutex> lock(impl_->mutex);if(impl_->audio)impl_->audio->volume(value);
+#endif
 }
 void PlayerSession::pause(bool paused) {
   std::lock_guard<std::mutex> lock(impl_->mutex);

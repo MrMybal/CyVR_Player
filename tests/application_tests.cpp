@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <atomic>
 using namespace cyvr;
 using namespace cyvr::player;
 int main() {
@@ -448,6 +449,47 @@ int main() {
         throw std::runtime_error("Cancelled scrub or cinema wake gesture "
                                  "accidentally sought the video");
       app.action(1023);
+    }
+    {
+      UiModel ui;Platform platform;platform.root="content://test/library";platform.state_file=(root/"workspace.bin").u8string();
+      platform.locations=[] {return std::vector<BrowserItem>{{"content://test/library","Storage",true,0},{"content://test/usb","USB",true,0}};};
+      platform.documents=[](const std::string& uri){std::vector<BrowserItem> items;for(int n=0;n<13;++n)items.push_back({uri+"/video"+std::to_string(n),"Video "+std::to_string(n)+".mp4",false,1000});return items;};
+      std::atomic<int> calls{};
+      platform.thumbnail=[&](const std::string&){if(calls.fetch_add(1)<7)return std::vector<std::uint8_t>{};std::vector<std::uint8_t> pixels(160*90*4,255);return pixels;};
+      {
+        PlayerApplication app(ui,platform);DrawList draw;
+        auto wait=[&](auto condition){const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(7);while(std::chrono::steady_clock::now()<until){app.tick();ui.drawMain(draw);if(condition())return;std::this_thread::sleep_for(std::chrono::milliseconds(5));}throw std::runtime_error("Workspace update timed out");};
+        auto exists=[&](int id){for(const auto& w:ui.widgets())if(w.id==id)return true;return false;};
+        wait([&]{return exists(1106);});
+        std::vector<std::uint8_t> atlas;
+        wait([&]{if(!app.take_thumbnails(atlas))return false;for(int n=0;n<7;++n)if(atlas[(n*160*90)*4+3]!=255)return false;return true;});
+        if(calls.load()<8)throw std::runtime_error("Transient thumbnail failures were not retried");
+        app.action(1017);app.action(1016);ui.drawMain(draw);
+        if(!exists(1105) || exists(1106))throw std::runtime_error("Card layout must expose six items per page");
+        app.action(1014);if(app.snapshot().offset!=6)throw std::runtime_error("Card pagination skipped items");
+        app.action(1015);app.action(1013);ui.drawMain(draw);if(!exists(1106))throw std::runtime_error("List layout must expose seven items per page");
+        app.open((root/"timeline.gif").u8string());wait([&]{return app.session().state().ready;});app.session().pause(false);
+        app.action(1000);wait([&]{app.take_thumbnails(atlas);return !atlas.empty() && atlas[3]==255;});
+        if(!app.session().state().playing)throw std::runtime_error("Browser preview test did not run during playback");
+        app.action(1004);ui.drawMain(draw);if(!exists(1060)||!exists(1061)||!exists(1371))throw std::runtime_error("Language/theme/volume settings missing");
+        ui.handleApplicationSlider(1371,.4f,SliderPhase::Commit);app.action(1370);if(app.volume!=0)throw std::runtime_error("Mute control failed");app.action(1370);if(std::abs(app.volume-.4f)>1e-5)throw std::runtime_error("Unmute lost the selected volume");
+        app.action(1680);ui.drawMain(draw);if(!exists(1695))throw std::runtime_error("Video placement controls missing");
+        ui.handleApplicationSlider(1690,.6f,SliderPhase::Commit);ui.handleApplicationSlider(1693,.75f,SliderPhase::Commit);
+        app.action(1016);app.save();const auto saved=load_application_state(platform.state_file);
+        if(!saved || saved->favorites.size()!=1 || saved->browser_view!=1 || saved->display_tab!=4 || std::abs(saved->scene.x-2)>1e-4 || saved->scene.yaw!=90 || std::abs(saved->volume-.4f)>1e-5)throw std::runtime_error("Workspace preferences were not persisted");
+        app.action(1681);if(app.scene.x!=0 || app.scene.yaw!=0)throw std::runtime_error("Reset placement failed");
+        app.scene=saved->scene;app.save();
+      }
+      {
+        UiModel restored;PlayerApplication app(restored,platform);if(!app.restore(false) || app.snapshot().favorites.size()!=1 || app.scene.yaw!=90 || app.snapshot().browser_view!=1)throw std::runtime_error("Workspace preferences lost during host transfer");
+      }
+      {
+        std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();
+        const auto extension=bytes.find(std::string("1SRB\0\0\0\0",8));if(extension==std::string::npos)throw std::runtime_error("Workspace state extension missing");bytes.resize(extension);
+        std::ofstream legacy(platform.state_file,std::ios::binary|std::ios::trunc);legacy.write(bytes.data(),bytes.size());legacy.close();
+        auto migrated=load_application_state(platform.state_file);if(!migrated || migrated->scene!=SceneSettings{} || migrated->volume!=1 || !migrated->favorites.empty() || migrated->browser_view!=0)throw std::runtime_error("Previous player state was not migrated with neutral workspace defaults");
+      }
+      std::filesystem::remove(root/"workspace.bin");
     }
     std::ofstream(root / "state.bin", std::ios::binary | std::ios::trunc)
         << "CYVRP04";

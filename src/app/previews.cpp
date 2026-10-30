@@ -17,12 +17,27 @@ decode_preview(const Platform &platform, const std::string &location,
                const std::shared_ptr<Cancellation> &cancel) {
   // Never auto-fetch a stream URL. SAF/local files are opened on this worker
   // only.
+  if (location.find("://") != std::string::npos &&
+      location.rfind("content://", 0) != 0)
+    return {};
+  if (platform.thumbnail) {
+    try {
+      auto pixels = platform.thumbnail(location);
+      if (pixels.size() == thumb_w * thumb_h * 4 && !cancel->cancelled())
+        return pixels;
+    } catch (const std::exception &) {
+    }
+  }
+  if (cancel->cancelled())
+    return {};
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
   Demuxer input;
   StreamOptions options;
   options.open_timeout_ms = 1500;
   options.read_timeout_ms = 1500;
-  options.probe_bytes = 512 * 1024;
-  options.analyze_us = 250000;
+  options.probe_bytes = 2 * 1024 * 1024;
+  options.analyze_us = 1000000;
   if (location.rfind("content://", 0) == 0) {
     if (!platform.open_document)
       return {};
@@ -52,26 +67,42 @@ decode_preview(const Platform &platform, const std::string &location,
       *std::find_if(input.tracks().begin(), input.tracks().end(),
                     [&](const auto &t) { return t.index == stream; });
   if (info.width <= 0 || info.height <= 0 ||
-      std::int64_t(info.width) * info.height > 16777216)
+      std::int64_t(info.width) * info.height > 64 * 1024 * 1024)
     return {};
   // A single decoder, one thread, first decodable frame. No continuous preview
   // decode.
-  SoftwareDecoder decoder(input, stream, 1, 16777216);
-  for (int n = 0; n < 160 && !cancel->cancelled(); ++n) {
-    auto packet = input.read();
-    if (packet.status == ReadStatus::again)
-      continue;
-    if (packet.status == ReadStatus::packet) {
-      if (packet.packet->stream_index != stream)
+  SoftwareDecoder decoder(input, stream, 1, 64 * 1024 * 1024);
+  const auto duration = input.duration_us().value_or(0);
+  if (input.seekable() && duration > 10000000) {
+    input.seek(std::min<std::int64_t>(duration / 10, 30000000));
+    decoder.flush();
+  }
+  PacketPtr pending;
+  bool end = false;
+  for (int n = 0; n < 4096 && !cancel->cancelled() &&
+                  std::chrono::steady_clock::now() < deadline;
+       ++n) {
+    if (!pending && !end) {
+      auto packet = input.read();
+      if (packet.status == ReadStatus::again)
         continue;
-      decoder.send(packet.packet.get());
-    } else
+      if (packet.status == ReadStatus::packet) {
+        if (packet.packet->stream_index != stream)
+          continue;
+        pending = std::move(packet.packet);
+      } else
+        end = true;
+    }
+    if (pending) {
+      if (decoder.send(pending.get()))
+        pending.reset();
+    } else if (end)
       decoder.send(nullptr);
     auto frame = decoder.receive();
     if (frame.status == DecodeStatus::frame) {
       auto *f = frame.frame.get();
       if (f->width <= 0 || f->height <= 0 ||
-          std::int64_t(f->width) * f->height > 16777216)
+          std::int64_t(f->width) * f->height > 64 * 1024 * 1024)
         return {};
       const double par =
           f->sample_aspect_ratio.num > 0 && f->sample_aspect_ratio.den > 0
@@ -97,7 +128,7 @@ decode_preview(const Platform &platform, const std::string &location,
       sws_freeContext(scaler);
       return lines == h ? result : std::vector<std::uint8_t>{};
     }
-    if (packet.status == ReadStatus::end)
+    if (frame.status == DecodeStatus::end)
       break;
   }
   return {};
@@ -114,11 +145,14 @@ PlayerApplication::PreviewWorker::~PreviewWorker() {
   wake.notify_one();
   worker.join();
 }
-void PlayerApplication::PreviewWorker::request(std::vector<std::string> paths) {
+void PlayerApplication::PreviewWorker::request(std::vector<std::string> paths,
+                                               bool refresh) {
   std::lock_guard<std::mutex> lock(mutex);
   cancellation->cancel();
   requests = std::move(paths);
   pending = true;
+  reset_failures = true;
+  invalidate_cache = invalidate_cache || refresh;
   ++generation;
   atlas.assign(thumb_w * thumb_h * 7 * 4, 0);
   present.fill(false);
@@ -138,6 +172,15 @@ void PlayerApplication::PreviewWorker::run() {
       paths = requests;
       ticket = generation;
       pending = false;
+      if (reset_failures) {
+        failures.clear();
+        reset_failures = false;
+      }
+      if (invalidate_cache) {
+        cache.clear();
+        lru.clear();
+        invalidate_cache = false;
+      }
       cancellation = cancel = std::make_shared<Cancellation>();
     }
     for (std::size_t row = 0;
@@ -146,7 +189,7 @@ void PlayerApplication::PreviewWorker::run() {
       if (path.empty())
         continue;
       auto found = cache.find(path);
-      if (found == cache.end()) {
+      if (found == cache.end() && failures[path] < 3) {
         std::vector<std::uint8_t> pixels;
         try {
           pixels = decode_preview(platform, path, cancel);
@@ -154,24 +197,42 @@ void PlayerApplication::PreviewWorker::run() {
         }
         if (cancel->cancelled())
           break;
+        if (pixels.empty()) {
+          ++failures[path];
+          continue;
+        }
+        failures.erase(path);
         if (cache.size() >= 32) {
           cache.erase(lru.front());
           lru.erase(lru.begin());
         }
         found = cache.emplace(path, std::move(pixels)).first;
         lru.push_back(path);
-      } else {
+      } else if (found != cache.end()) {
         lru.erase(std::remove(lru.begin(), lru.end(), path), lru.end());
         lru.push_back(path);
       }
       std::lock_guard<std::mutex> lock(mutex);
       if (quit || ticket != generation)
         break;
-      if (!found->second.empty()) {
+      if (found != cache.end() && !found->second.empty()) {
         std::copy(found->second.begin(), found->second.end(),
                   atlas.begin() + row * thumb_w * thumb_h * 4);
         present[row] = true;
         ++revision;
+      }
+    }
+    {
+      bool retry = false;
+      for (const auto &path : paths)
+        if (!path.empty() && !cache.count(path) && failures[path] < 3)
+          retry = true;
+      std::unique_lock<std::mutex> lock(mutex);
+      if (retry && !quit && ticket == generation) {
+        wake.wait_for(lock, std::chrono::seconds(2),
+                      [&] { return quit || pending; });
+        if (!quit && ticket == generation)
+          pending = true;
       }
     }
   }

@@ -31,6 +31,16 @@ int main(){try{
     require(gaps.media_at(192)==192 && gaps.stats().gap==96,"Declared gap did not advance presentation time");
     AudioQueue bounded;for(int i=0;i<128;++i)require(bounded.push(samples.data(),1024,i*1024),"Queue filled too early");require(!bounded.push(samples.data(),1024,128*1024),"Queue grew beyond its budget");
     AudioQueue tail;tail.finish();tail.render(output.data(),192);require(tail.media_at(192)==192 && !tail.stats().underrun,"Known audio tail stalled video or counted starvation");
+    {
+      std::vector<float> constant(1024*2,.5f),pcm(1024*2);
+      AudioQueue gain(.25f);require(gain.push(constant.data(),1024,0),"Cannot queue gain fixture");gain.render(pcm.data(),1024);
+      require(std::all_of(pcm.begin(),pcm.end(),[](float v){return std::abs(v-.125f)<1e-6;}),"Volume changed stereo gain incorrectly");
+      gain.set_gain(0);require(gain.push(constant.data(),1024,1024),"Cannot queue mute fixture");gain.render(pcm.data(),1024);
+      require(pcm.front()<.125f && pcm.front()>.12f && pcm.back()<.002f,"Volume changes must ramp without clicks or amplification");
+      require(gain.media_at(2048)==2048,"Muting must preserve the media clock");
+      AudioQueue silent(0);require(silent.push(constant.data(),1024,0),"Cannot queue silent fixture");silent.render(pcm.data(),1024);
+      require(std::all_of(pcm.begin(),pcm.end(),[](float v){return v==0;}),"A muted new output emitted sound");
+    }
 #ifdef CYVR_TEST_AUDIO_CONVERSION
     for(int channels:{2,6,8}){
         AudioConverter converter;StereoSamples converted;

@@ -80,7 +80,7 @@ bool PlayerApplication::draw_performance(cyvr::DrawList &d) {
 }
 bool PlayerApplication::draw(cyvr::DrawList &d) {
   using cyvr::Color;
-  d.clear();
+  d.clear();icon_hint_.clear();
   ui_.clearApplicationWidgets();
   const bool light = ui_.settings.theme == cyvr::Theme::Light,
              ocean = ui_.settings.theme == cyvr::Theme::Ocean;
@@ -116,22 +116,30 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
   auto accent = Color::hex(light ? 0x126854 : ocean ? 0x95bdff : 0x86e7cf);
   auto surface = Color::hex(light ? 0xc1d3db : ocean ? 0x293e66 : 0x22323b);
   if(immersive && ui_.compactInterface){
-    d.rect({228,785,984,168},Color::hex(light?0xe4eef1:0x15242d,.96f),20);
+    d.rect({228,694,984,264},Color::hex(light?0xe4eef1:0x15242d,.96f),20);
+    const int toolbar[]{1364,1365,1366,1367,1662,1368,1369};
+    const Icon glyphs[]{Icon::Library,Icon::Info,Icon::Image,Icon::Move,Icon::Cinema,Icon::Tracks,Icon::Settings};
+    const char* hints[]{"Library","Movie information","Image quality","Video placement","Cinema","Tracks, subtitles and chapters","Settings"};
+    for(int n=0;n<7;++n)icon_button(d,toolbar[n],{252.f+n*76,706,62,48},glyphs[n],hints[n]);
+    icon_button(d,1360,{1134,706,54,48},Icon::Window,"Full interface");
     const auto position=timeline_position();
     const bool seek=state_.ready && state_.seekable && state_.duration_us>0;
     const float progress=state_.duration_us>0 ? float(std::clamp(double(position)/double(state_.duration_us),0.,1.)) : 0;
-    const cyvr::Rect track{252,800,936,42};
-    d.rect({track.x,816,track.w,8},surface,4);
-    d.rect({track.x,816,track.w*progress,8},accent,4);
-    if(seek)d.rect({track.x+track.w*progress-9,811,18,18},accent,9);
+    const cyvr::Rect track{252,768,936,42};
+    d.rect({track.x,784,track.w,8},surface,4);d.rect({track.x,784,track.w*progress,8},accent,4);
+    if(seek)d.circle({track.x+track.w*progress,788},9,accent);
     ui_.applicationWidget(1025,track,cyvr::Control::Slider,seek);
-    d.text(252,850,20,clockText(position),white);
-    d.text(1065,850,20,state_.duration_us>0?clockText(state_.duration_us):"--:--:--",muted);
-    button(d,1362,{252,890,118,44},"Previous",false,adjacent_video(-1,false));
-    button(d,1020,{384,890,144,44},state_.playing?"Pause":"Resume",false,state_.ready && !state_.ended);
-    button(d,1363,{542,890,118,44},"Next",false,adjacent_video(1,false));
-    button(d,1662,{674,890,180,44},"Cinema");
-    button(d,1360,{868,890,320,44},"Full interface");
+    d.text(252,818,20,clockText(position),white);d.text(1065,818,20,state_.duration_us>0?clockText(state_.duration_us):"--:--:--",muted);
+    icon_button(d,1362,{252,856,58,58},Icon::Previous,"Previous",false,adjacent_video(-1,false));
+    icon_button(d,1020,{322,856,70,58},state_.playing?Icon::Pause:Icon::Play,state_.playing?"Pause":"Resume",false,state_.ready&&!state_.ended);
+    icon_button(d,1023,{404,856,58,58},Icon::Stop,"Stop",false,state_.ready);
+    icon_button(d,1363,{474,856,58,58},Icon::Next,"Next",false,adjacent_video(1,false));
+    icon_button(d,1021,{548,856,58,58},Icon::Back10,"-10 s",false,seek);
+    icon_button(d,1022,{618,856,58,58},Icon::Forward10,"+10 s",false,seek);
+    icon_button(d,1370,{708,856,58,58},volume>0?Icon::Volume:Icon::Mute,"Mute",volume==0);
+    const cyvr::Rect gain{786,860,324,50};d.rect({gain.x,882,gain.w,8},surface,4);d.rect({gain.x,882,gain.w*volume,8},accent,4);d.circle({gain.x+gain.w*volume,886},9,accent);ui_.applicationWidget(1371,gain,cyvr::Control::Slider);
+    d.text(1128,874,18,cyvr::formatNumber(ui_.settings.language,volume*100,0)+" %",muted);
+    if(!icon_hint_.empty())d.text(252,932,16,icon_hint_,accent);
     return true;
   }
   d.rect({0, 0, 1440, 990},
@@ -142,82 +150,13 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
          30);
   d.text(32, 22, 34, "CyVR Player", white);
   d.text(270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
-  if(immersive && state_.ready)button(d,1361,{510,22,216,52},"Compact controls");
-  button(d, 1060, {740, 22, 160, 52},
-         ui_.settings.language == "fr" ? "Français" : "English");
-  button(d, 1061, {914, 22, 216, 52},
-         light   ? "Light"
-         : ocean ? "Ocean"
-                 : "Graphite");
-  button(d, 1062, {1144, 22, 264, 52},
-         immersive ? "Return to 2D" : "Enter immersive", false,
-         immersive || ui_.immersiveAvailable);
-  const char *pages[]{"Library", "Playback", "Open stream", "Display"};
-  for (int i = 0; i < 4; ++i)
-    button(d, 1000 + i, {32.f + i * 343, 94, 328, 62}, pages[i], page_ == i);
+  if(immersive && state_.ready)icon_button(d,1361,{1174,18,62,60},Icon::Minimize,"Compact controls");
+  icon_button(d,1063,{1250,18,62,60},Icon::Settings,"Settings",page_==4);
+  icon_button(d,1062,{1330,18,62,60},immersive?Icon::Window:Icon::Headset,immersive?"Return to 2D":"Enter immersive",false,immersive||ui_.immersiveAvailable);
+  const char* pages[]{"Library","Playback","Open stream","Display","Settings"};
+  for(int i=0;i<5;++i)button(d,1000+i,{32.f+i*275,94,263,62},pages[i],page_==i);
   if (page_ == 0) {
-    d.text(36, 190, 34, tr("Your videos"), white);
-    button(d, 1010, {800, 186, 170, 52}, "Parent folder", false,
-           !parents_.empty());
-    button(d, 1011, {984, 186, 162, 52}, "Refresh");
-    button(d, 1012, {1160, 186, 244, 52}, "Allow a folder", false,
-           bool(platform_.request_tree));
-    d.text(36, 251, 20,
-           fit(d,
-               directory_.rfind("content://", 0) == 0
-                   ? tr("Authorized Android folder")
-                   : std::string_view(directory_),
-               1350, 20),
-           muted);
-    for (int row = 0; row < 7 && offset_ + row < int(entries_.size()); ++row) {
-      const auto &item = entries_[offset_ + row];
-      float y = 304.f + row * 75;
-      d.rect({32, y, 1376, 65},
-             ui_.hovered() == 1100 + row ? Color::hex(light   ? 0xacd6ce
-                                                      : ocean ? 0x385984
-                                                              : 0x344b56)
-                                         : surface,
-             10);
-      if (preview_present_[row] && !item.directory)
-        d.image({44, y + 1, 112, 63},
-                {.5f / 160, (row * 90 + .5f) / 630, 159.f / 160, 89.f / 630});
-      else
-        d.text(51, y + 17, 22,
-               tr(item.directory                                     ? "FOLDER"
-                  : classify_extension(item.name) == FileKind::splat ? "SPLATS"
-                  : classify_extension(item.name) == FileKind::subtitle ? "SUBTITLE"
-                  : classify_extension(item.name) == FileKind::key ? "KEYS"
-                  : classify_extension(item.name) == FileKind::disc ? "DISC"
-                                                                     : "VIDEO"),
-               accent);
-      d.text(195, y + 16, 24, fit(d, item.name, 1010), white);
-      if (!item.directory) {
-        const double scale = item.size >= 1073741824 ? 1073741824.
-                             : item.size >= 1048576  ? 1048576.
-                                                     : 1024.;
-        const char *unit = item.size >= 1073741824 ? " GiB"
-                           : item.size >= 1048576  ? " MiB"
-                                                   : " KiB";
-        d.text(1220, y + 20, 19,
-               cyvr::formatNumber(ui_.settings.language, item.size / scale, 1) +
-                   unit,
-               muted);
-      }
-      ui_.applicationWidget(1100 + row, {32, y, 1376, 65});
-    }
-    if (entries_.empty())
-      d.text(50, 364, 26, tr("No accessible videos in this folder yet."),
-             muted);
-    button(d, 1013, {1040, 850, 172, 56}, "Previous", false, offset_ > 0);
-    button(d, 1014, {1226, 850, 178, 56}, "Next", false,
-           offset_ + 7 < int(entries_.size()));
-    auto status =
-        browse_status_ == "Reading folder..." ? std::string(tr(browse_status_))
-        : !browse_status_.empty() && browse_status_[0] >= '0' &&
-                browse_status_[0] <= '9'
-            ? std::to_string(entries_.size()) + " " + std::string(tr("items"))
-            : browse_status_;
-    d.text(36, 861, 21, fit(d, status, 980, 21), muted);
+    draw_library(d);
   } else if (page_ == 1) {
     if(tracks_open_){draw_tracks(d);return true;}
     d.text(36, 186, 34,
@@ -260,9 +199,9 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                             : "Tap / Enter / Space: show interface"),
                400, 18),
            muted);
-    button(d, 1331, {980, 664, 125, 44}, "Zoom out");
-    button(d, 1332, {1120, 664, 125, 44}, "Zoom in");
-    button(d, 1333, {1260, 664, 125, 44}, "Fit image");
+    icon_button(d, 1331, {980, 664, 125, 44}, Icon::ZoomOut, "Zoom out", false, true,true);
+    icon_button(d, 1332, {1120, 664, 125, 44}, Icon::ZoomIn, "Zoom in", false, true,true);
+    icon_button(d, 1333, {1260, 664, 125, 44}, Icon::Fit, "Fit image", false, true,true);
     button(d, 1334, {980, 716, 405, 34}, "Performance", ui_.debugVisible);
     const auto position = timeline_position();
     const bool canSeek =
@@ -296,15 +235,17 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                           : "Seeking unavailable for this source"),
                400, 18),
            muted);
-    button(d, 1020, {32, 814, 260, 64}, state_.playing ? "Pause" : "Resume",
-           false, state_.ready && !state_.ended);
-    button(d, 1021, {310, 814, 200, 64}, "-10 s", false,
-           state_.ready && state_.seekable);
-    button(d, 1022, {528, 814, 200, 64}, "+10 s", false,
-           state_.ready && state_.seekable);
-    button(d, 1023, {746, 814, 200, 64}, "Stop", false, state_.ready);
-    button(d, 1024, {964, 814, 444, 64}, "Hide interface", false, state_.ready);
-    button(d,1400,{32,895,650,52},"Tracks, subtitles and chapters",false,!source_.empty());
+    icon_button(d,1362,{32,814,74,64},Icon::Previous,"Previous",false,adjacent_video(-1,false));
+    icon_button(d,1020,{120,814,104,64},state_.playing?Icon::Pause:Icon::Play,state_.playing?"Pause":"Resume",false,state_.ready&&!state_.ended);
+    icon_button(d,1023,{238,814,74,64},Icon::Stop,"Stop",false,state_.ready);
+    icon_button(d,1363,{326,814,74,64},Icon::Next,"Next",false,adjacent_video(1,false));
+    icon_button(d,1021,{426,814,104,64},Icon::Back10,"-10 s",false,state_.ready&&state_.seekable);
+    icon_button(d,1022,{544,814,104,64},Icon::Forward10,"+10 s",false,state_.ready&&state_.seekable);
+    icon_button(d,1370,{684,814,70,64},volume>0?Icon::Volume:Icon::Mute,"Mute",volume==0);
+    const cyvr::Rect gain{776,820,268,52};d.rect({gain.x,842,gain.w,8},surface,4);d.rect({gain.x,842,gain.w*volume,8},accent,4);d.circle({gain.x+gain.w*volume,846},9,accent);ui_.applicationWidget(1371,gain,cyvr::Control::Slider);
+    button(d,1024,{1070,814,338,64},"Hide interface",false,state_.ready);
+    icon_button(d,1400,{32,895,650,52},Icon::Tracks,"Tracks, subtitles and chapters",false,!source_.empty(),true);
+    icon_button(d,1680,{702,895,350,52},Icon::Move,"Video placement",false,true,true);
   } else if (page_ == 2) {
     d.text(36, 187, 34, tr("Open a video stream"), white);
     d.text(36, 243, 22, tr("HTTP(S), HLS, RTSP — enter the complete address."),
@@ -324,11 +265,12 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
     button(d, 1253, {638, 746, 190, 64}, "Symbols", symbols_);
     button(d, 1255, {842, 746, 140, 64}, "Aa", shift_, !symbols_);
     button(d, 1254, {36, 838, 1368, 66}, "Open", true, !url_.empty());
+  } else if(page_==4){draw_settings(d);
   } else {
-    const char *tabs[]{"Video format", "Image corrections", "Image quality", "Immersive cinema"};
+    const char *tabs[]{"Video format", "Image corrections", "Image quality", "Immersive cinema","Video placement"};
     d.text(36, 182, 34, tr(tabs[display_tab_]), white);
-    for (int i = 0; i < 4; ++i)
-      button(d, 1300 + i, {36.f + i * 343, 246, 330, 58}, tabs[i],
+    for (int i = 0; i < 5; ++i)
+      button(d, 1300 + i, {36.f + i * 275, 246, 263, 58}, tabs[i],
              display_tab_ == i);
     auto slider = [&](int id, float y, std::string_view label, float value,
                       float lo, float hi) {
@@ -345,26 +287,26 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
     if (display_tab_ == 0) {
       d.text(36, 340, 23, tr("Eye layout"), muted);
       for (int i = 0; i < 3; ++i)
-        button(d, 1030 + i, {36.f + i * 458, 382, 444, 68},
+        icon_button(d, 1030 + i, {36.f + i * 458, 382, 444, 68},i==0?Icon::Mono:i==1?Icon::Sbs:Icon::Tb,
                i == 0   ? "2D video"
                : i == 1 ? "3D side by side (SBS)"
                         : "3D top / bottom (TB)",
-               stereo == i);
+               stereo == i,true,true);
       d.text(36, 490, 23, tr("Projection"), muted);
       for (int i = 0; i < 3; ++i)
-        button(d, 1040 + i, {36.f + i * 458, 532, 444, 68},
+        icon_button(d, 1040 + i, {36.f + i * 458, 532, 444, 68},i==0?Icon::Cinema:i==1?Icon::HalfSphere:Icon::Sphere,
                i == 0   ? "Cinema screen"
                : i == 1 ? "VR 180°"
                         : "Panorama 360°",
-               projection == i, i == 0 || platform_.panorama);
-      button(d, 1050, {36, 652, 444, 68}, "Recenter video", false, immersive);
-      button(d, 1051, {494, 652, 444, 68}, "Half-resolution 3D", half_stereo,
-             stereo != 0);
-      button(d, 1052, {952, 652, 452, 68}, "Swap eyes", swap_eyes, stereo != 0);
+               projection == i, i == 0 || platform_.panorama,true);
+      icon_button(d, 1050, {36, 652, 444, 68}, Icon::Recenter, "Recenter video", false, immersive,true);
+      icon_button(d, 1051, {494, 652, 444, 68}, Icon::Half, "Half-resolution 3D", half_stereo,
+             stereo != 0,true);
+      icon_button(d, 1052, {952, 652, 452, 68}, Icon::Swap, "Swap eyes", swap_eyes, stereo != 0,true);
 
-      button(d, 1331, {36, 744, 215, 60}, "Zoom out");
-      button(d, 1332, {267, 744, 215, 60}, "Zoom in");
-      button(d, 1333, {498, 744, 250, 60}, "Fit image");
+      icon_button(d, 1331, {36, 744, 215, 60}, Icon::ZoomOut, "Zoom out", false, true,true);
+      icon_button(d, 1332, {267, 744, 215, 60}, Icon::ZoomIn, "Zoom in", false, true,true);
+      icon_button(d, 1333, {498, 744, 250, 60}, Icon::Fit, "Fit image", false, true,true);
       button(d,1054,{770,744,634,60},auto_format_?"Auto-detection: On":"Auto-detection: Off",auto_format_);
       button(d,1053,{1034,814,370,52},"Detect once");
       const char* detection=(!auto_format_ || format_manual_)?"Manual video format":detected_layout_.ambiguous?"Projection not recognised; select the format manually.":detected_layout_.evidence==3?"Automatic format: decoded stereo views":detected_layout_.evidence==2?"Automatic format: video metadata":detected_layout_.evidence==1?"Automatic format: filename hints":"Automatic format: standard 2D";
@@ -421,10 +363,14 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                      : std::string_view(processing_status),
                  1360, 19),
              muted);
+    } else if(display_tab_==4){draw_placement(d);
     } else {
-      button(d,1660,{36,320,444,52},"Screen geometry",cinema_tab_==0);
-      button(d,1661,{498,320,444,52},"Environment",cinema_tab_==1);
-      button(d,1663,{960,320,444,52},"Ambilight",cinema_tab_==2);
+      d.rect({24,382,1392,534},Color::hex(light?0xd4e2e6:0x101c24),16);
+      d.border({24,382,1392,534},Color::hex(light?0x86ada6:0x34564e),16,1.5f);
+      icon_button(d,1660,{36,320,444,52},Icon::Geometry,"Screen geometry",cinema_tab_==0,true,true);
+      icon_button(d,1661,{498,320,444,52},Icon::Environment,"Environment",cinema_tab_==1,true,true);
+      icon_button(d,1663,{960,320,444,52},Icon::Glow,"Ambilight",cinema_tab_==2,true,true);
+      d.rect({36.f+cinema_tab_*462,374,444,4},accent,2);
       if(cinema_tab_==0){
         slider(1640,390,"Screen width (m)",cinema.width,1,12);
         slider(1641,452,"Viewing distance (m)",cinema.distance,1,12);
@@ -434,8 +380,8 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
         slider(1645,700,"Screen roll (degrees)",cinema.roll,-180,180);
         const char* presets[]{"Flat screen","Curved screen","Large cinema","Reset screen"};
         for(int i=0;i<4;++i)button(d,1620+i,{36.f+i*343,776,330,56},presets[i]);
-        d.text(36,855,20,tr("Geometry applies to cinema video; VR180/360 keep their projection."),muted);
-        d.text(36,887,20,tr("Zoom and image position remain available under Image corrections."),muted);
+        d.text(36,849,18,tr("Geometry applies to cinema video; VR180/360 keep their projection."),muted);
+        d.text(36,876,18,tr("Zoom and image position remain available under Image corrections."),muted);
       }else if(cinema_tab_==1){
         const char* names[]{"Black cinema","Dark background","Sunlit lounge","Venice sunset","Passthrough","Modern lounge","Observatory","Sunset terrace"};
         for(int i=0;i<8;++i)button(d,1610+i,{36.f+(i%4)*343,406.f+(i/4)*78,330,64},names[i],cinema.environment==i,true);
@@ -456,12 +402,12 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
         button(d,1672,{36,828,330,52},"Reset Ambilight");
         d.text(390,849,19,tr("A soft video-coloured glow follows the flat or curved cinema screen."),muted);
       }
-      if(!immersive)d.text(36,907,18,tr("These settings take effect when you enter immersive mode."),accent);
+      if(!immersive)d.text(36,900,16,tr("These settings take effect when you enter immersive mode."),accent);
     }
   }
   d.line({32, 929}, {1408, 929}, Color::hex(light ? 0xb0c3c9 : 0x354851));
   d.text(36, 950, 18,
-         ui_.toast().empty()
+         !icon_hint_.empty()?std::string_view(icon_hint_):ui_.toast().empty()
              ? tr(immersive ? (image.quality
                                    ? "Spatial enhancement active"
                                    : "Native source resolution / no upscaling")

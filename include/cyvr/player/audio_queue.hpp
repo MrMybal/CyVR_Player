@@ -11,7 +11,8 @@ struct AudioQueueStats {
 class AudioQueue {
 public:
     static constexpr unsigned block_frames=2048;
-    AudioQueue();
+    explicit AudioQueue(float gain = 1);
+    void set_gain(float) noexcept;
     ~AudioQueue();
     bool push(const float* stereo,unsigned frames,std::int64_t start);
     void finish() noexcept;

@@ -37,6 +37,19 @@ int main() {
         "Initial cinema placement must retain the existing viewing distance");
     require(same(original.orientation, head.orientation),
             "Initial video orientation must face the viewer");
+    {
+      SceneSettings scene;scene.x=2;scene.y=-.75f;scene.z=1;scene.yaw=90;scene.pitch=-35;scene.roll=18;
+      const auto moved=video.screen(image,CinemaSettings{},scene);
+      require(same(moved.position,original.position+Vec3{2,-.75f,1}),"Six-axis placement must move the video in its own anchor axes");
+      require(!same(moved.orientation,original.orientation),"Explicit video rotation was ignored");
+      const auto panelBefore=panel.pose;
+      const Pose change{{.4f,.3f,-1},yawRotation(.8f)};
+      video.transform(inverse_pose(change));
+      require(same(compose_pose(change,video.screen(image,CinemaSettings{},scene)),moved),"Tracking origin rebasing must preserve manually placed and rotated video");
+      require(same(panel.pose,panelBefore),"Manual video placement must not move the controls");
+      video.transform(change);
+      scene.x=NAN;scene.yaw=999;scene.sanitize();require(scene.x==0 && scene.yaw==180,"Invalid placement must be bounded");
+    }
     CinemaSettings cinema;cinema.width=7;cinema.distance=6;cinema.elevation=.75f;cinema.curvature=90;cinema.pitch=25;cinema.roll=-12;
     const auto customized=video.screen(image,cinema);
     require(same(customized.position,{0,2.35f,-6}),"Screen distance and height must be independent of the controls");
@@ -86,6 +99,13 @@ int main() {
         same(video.screen(image), compose_pose(local_from_view, in_view)),
         "VIEW-to-LOCAL transition must transform the existing video anchor");
     const auto moved_panel = panel.pose;
+    {
+      const Quat tilted{std::sin(.6f),0,0,std::cos(.6f)};
+      const Pose reclining{{.5f,1.2f,.3f},tilted};
+      video.place(reclining,1.35f,true);
+      const auto centered=video.screen(image);
+      require(same(centered.orientation,tilted) && same(centered.position,reclining.position+rotate(tilted,{0,0,-3.5f})),"Place in front must honor the actual tilted headset view");
+    }
     const Pose new_head{{-.3f, 1.8f, .4f}, yawRotation(1.1f)};
     video.place(new_head, 1.35f);
     require(!same(video.screen(image), original),

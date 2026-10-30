@@ -8,6 +8,7 @@
 #include "cyvr/player/subtitles.hpp"
 #include "cyvr/player/track_selection.hpp"
 #include "cyvr/player/splats.hpp"
+#include "cyvr/player/icons.hpp"
 #include <functional>
 #include <memory>
 #ifdef __ANDROID__
@@ -30,6 +31,8 @@ struct Platform {
   std::function<std::string(const std::string &, int, int)> hardware_codec;
   std::function<void()> request_tree;
   std::function<void()> cancel_documents;
+  std::function<std::vector<BrowserItem>()> locations;
+  std::function<std::vector<std::uint8_t>(const std::string &)> thumbnail;
 };
 struct PlayerState {
   std::uint64_t revision{},media_id{};
@@ -67,6 +70,7 @@ public:
   SplatSnapshot splats() const;
   void stop();
   void pause(bool paused);
+  void volume(float);
   void seek(std::int64_t position_us);
   PlayerState state() const;
   VideoMetrics metrics() const;
@@ -106,6 +110,8 @@ public:
   std::uint64_t processing_request{};
   std::uint64_t video_placement_request{};
   CinemaSettings cinema;
+  SceneSettings scene;
+  float volume{1};
   AmbilightSettings ambilight;
   RenderMonitor render_monitor;
   PlayerSession &session() { return session_; }
@@ -140,6 +146,19 @@ private:
   int cinema_tab_{};
   bool format_manual_{};
   bool auto_format_{};
+  int browser_view_{},sidebar_tab_{},sidebar_offset_{};
+  std::vector<FolderBookmark> favorites_;
+  std::vector<BrowserItem> locations_;
+  float unmuted_volume_{1};
+  std::string icon_hint_;
+  std::string folder_name_;
+  int browser_page_size()const{return browser_view_?6:7;}
+  void refresh_locations();
+  void toggle_favorite();
+  void draw_library(cyvr::DrawList&);
+  void draw_settings(cyvr::DrawList&);
+  void draw_placement(cyvr::DrawList&);
+  bool draw_dock(cyvr::DrawList&);
   std::uint64_t format_media_id_{};
   int format_track_{-1};
   DetectedVideoLayout detected_layout_;
@@ -176,5 +195,6 @@ private:
   std::int64_t timeline_position() const;
   void button(cyvr::DrawList &, int, cyvr::Rect, std::string_view,
               bool selected = false, bool enabled = true);
+  void icon_button(cyvr::DrawList&,int,cyvr::Rect,Icon,std::string_view,bool selected=false,bool enabled=true,bool label=false);
 };
 } // namespace cyvr::player

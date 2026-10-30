@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 #include <stdexcept>
+#include <cmath>
 namespace cyvr::player {
 struct AudioQueue::Impl {
     static constexpr unsigned slots=128,history=2048;
@@ -14,6 +15,8 @@ struct AudioQueue::Impl {
     std::atomic<std::uint64_t> read{},write{},published{},rendered{},underrun{},gap{},expired{};
     std::atomic<std::int64_t> media_cursor{},device_cursor{},queued_end{};
     std::atomic<bool> finished{};
+    std::atomic<float> target_gain{1};
+    float current_gain{1}; // Audio callback only after construction.
     std::uint64_t sequence{}; // callback only
     void segment(std::int64_t device,std::int64_t media,unsigned count,bool advancing)noexcept{
         auto& s=clock[sequence%history];s.stamp.store(sequence*2+1,std::memory_order_release);
@@ -22,7 +25,8 @@ struct AudioQueue::Impl {
         s.stamp.store(sequence*2+2,std::memory_order_release);published.store(++sequence,std::memory_order_release);
     }
 };
-AudioQueue::AudioQueue():impl_(std::make_unique<Impl>()){}
+AudioQueue::AudioQueue(float gain):impl_(std::make_unique<Impl>()){set_gain(gain);impl_->current_gain=impl_->target_gain.load();}
+void AudioQueue::set_gain(float gain)noexcept{impl_->target_gain.store(std::isfinite(gain)?std::clamp(gain,0.f,1.f):1.f,std::memory_order_release);}
 AudioQueue::~AudioQueue()=default;
 bool AudioQueue::push(const float* samples,unsigned count,std::int64_t start){
     if(!samples || !count || count>block_frames)throw std::invalid_argument("Invalid stereo audio block");
@@ -33,6 +37,7 @@ bool AudioQueue::push(const float* samples,unsigned count,std::int64_t start){
     p.queued_end.store(start+count,std::memory_order_release);p.write.store(index+1,std::memory_order_release);return true;
 }
 void AudioQueue::render(float* destination,unsigned count,bool running)noexcept{
+    auto* output=destination;
     auto& p=*impl_;auto media=p.media_cursor.load(std::memory_order_relaxed);auto device=p.device_cursor.load(std::memory_order_relaxed);
     unsigned remaining=count;
     while(remaining){
@@ -59,6 +64,12 @@ void AudioQueue::render(float* destination,unsigned count,bool running)noexcept{
         p.segment(device,media,take,true);media+=take;device+=take;remaining-=take;destination+=take*2;
     }
     p.media_cursor.store(media,std::memory_order_release);p.device_cursor.store(device,std::memory_order_release);
+    const float target=p.target_gain.load(std::memory_order_acquire);
+    if(target!=1 || p.current_gain!=1)for(unsigned n=0;n<count;++n){
+        p.current_gain+=(target-p.current_gain)*(1.f/240);
+        if(std::abs(target-p.current_gain)<1e-5f)p.current_gain=target;
+        output[n*2]*=p.current_gain;output[n*2+1]*=p.current_gain;
+    }
 }
 std::int64_t AudioQueue::media_at(std::int64_t device)const noexcept{
     if(device<=0)return 0;const auto& p=*impl_;const auto end=p.published.load(std::memory_order_acquire);

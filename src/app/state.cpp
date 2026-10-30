@@ -84,7 +84,7 @@ bool save_application_state(const std::string &path,
     }
     c.put(image.quality);
     c.put(image.upscale);
-    c.put(std::clamp(s.display_tab, 0, 3));
+    c.put(std::clamp(s.display_tab, 0, 4));
     c.put(std::uint64_t(0x54524b31));
     for(int stream:{s.tracks.video,s.tracks.audio,s.tracks.subtitle})c.put(std::uint64_t(std::clamp(stream,-2,255)+2));
     c.put(s.tracks.external_subtitle);
@@ -104,6 +104,12 @@ bool save_application_state(const std::string &path,
     c.put(std::uint64_t(0x41555431));c.put(s.auto_format?1:0);
     c.put(std::uint64_t(0x464c5431));c.put(image.sampling);
     for(float value:{image.denoise,image.detail}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
+    c.put(std::uint64_t(0x42525331));c.put(std::clamp(s.browser_view,0,1));
+    auto scene=s.scene;scene.sanitize();c.put(scene.stable?1:0);
+    for(float value:{scene.x,scene.y,scene.z,scene.yaw,scene.pitch,scene.roll,std::isfinite(s.volume)?std::clamp(s.volume,0.f,1.f):1.f}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
+    if(s.favorites.size()>16)throw std::runtime_error("Folder bookmark limit exceeded");
+    c.put(s.favorites.size());
+    for(const auto& favorite:s.favorites){c.put(favorite.location);c.put(favorite.name);if(favorite.parents.size()>32)throw std::runtime_error("Bookmark navigation limit exceeded");c.put(favorite.parents.size());for(const auto& parent:favorite.parents)c.put(parent);}
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -159,8 +165,8 @@ load_application_state(const std::string &path) noexcept {
     if (position > std::uint64_t(INT64_MAX))
       return {};
     s.position_us = std::int64_t(position);
-    s.page = int(std::min<std::uint64_t>(3, c.get()));
-    s.offset = int(std::min<std::uint64_t>(511, c.get()));
+    s.page = int(std::min<std::uint64_t>(4, c.get()));
+    s.offset = int(std::min<std::uint64_t>(9999, c.get()));
     s.stereo = int(std::min<std::uint64_t>(2, c.get()));
     s.projection = int(std::min<std::uint64_t>(2, c.get()));
     auto flags = c.get();
@@ -186,7 +192,7 @@ load_application_state(const std::string &path) noexcept {
       const auto savedScale=c.get();s.image.upscale=imageTag==0x494d4731?0:int(std::min<std::uint64_t>(3,savedScale));
       s.image.sanitize();
       if (c.cursor < c.bytes.size())
-        s.display_tab = int(std::min<std::uint64_t>(3, c.get()));
+        s.display_tab = int(std::min<std::uint64_t>(4, c.get()));
       if(c.cursor<c.bytes.size()){
         if(c.get()!=0x54524b31)return {};
         for(int* stream:{&s.tracks.video,&s.tracks.audio,&s.tracks.subtitle}){const auto value=c.get();if(value>257)return {};*stream=int(value)-2;}
@@ -210,6 +216,13 @@ load_application_state(const std::string &path) noexcept {
               if(c.get()!=0x464c5431)return {};const auto sampling=c.get();if(sampling>2)return {};s.image.sampling=int(sampling);
               for(float* value:{&s.image.denoise,&s.image.detail}){const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);}
               s.image.sanitize();
+            }
+            if(c.cursor<c.bytes.size()){
+              if(c.get()!=0x42525331)return {};auto view=c.get(),stable=c.get();if(view>1 || stable>1)return {};s.browser_view=int(view);s.scene.stable=stable!=0;
+              for(float* value:{&s.scene.x,&s.scene.y,&s.scene.z,&s.scene.yaw,&s.scene.pitch,&s.scene.roll,&s.volume}){const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);}
+              s.scene.sanitize();s.volume=std::isfinite(s.volume)?std::clamp(s.volume,0.f,1.f):1.f;
+              const auto count=c.get();if(count>16)return {};
+              for(unsigned i=0;i<count;++i){FolderBookmark favorite;favorite.location=c.string();favorite.name=c.string();const auto parents=c.get();if(parents>32)return {};for(unsigned n=0;n<parents;++n)favorite.parents.push_back(c.string());s.favorites.push_back(std::move(favorite));}
             }
           }
         }

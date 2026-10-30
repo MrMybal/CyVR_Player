@@ -66,6 +66,8 @@ AndroidBridge::AndroidBridge(android_app *app)
     open_ = e.env->GetMethodID(type_, "openDocument", "(Ljava/lang/String;)[J");
     close_ = e.env->GetMethodID(type_, "closeDocument", "(I)V");
     cancel_ = e.env->GetMethodID(type_, "cancelQuery", "()V");
+    locations_=e.env->GetMethodID(type_,"folderLocations","()[Ljava/lang/String;");
+    thumbnail_=e.env->GetMethodID(type_,"videoThumbnail","(Ljava/lang/String;)[B");
     e.check();
 }
 AndroidBridge::~AndroidBridge() {
@@ -77,6 +79,15 @@ Platform AndroidBridge::platform() {
     Platform p;
     p.root = root_;
     p.state_file=state_file_;
+    p.locations=[this]{
+      Env e(vm_);auto array=static_cast<jobjectArray>(e.env->CallObjectMethod(activity_,locations_));e.check();auto flat=strings(e.env,array);
+      std::vector<BrowserItem> items{{root_,"App files",true,0}};
+      for(size_t i=0;i+1<flat.size();i+=2)items.push_back({flat[i],flat[i+1],true,0});return items;
+    };
+    p.thumbnail=[this](const std::string& uri){
+      Env e(vm_);auto text=e.env->NewStringUTF(uri.c_str());auto bytes=static_cast<jbyteArray>(e.env->CallObjectMethod(activity_,thumbnail_,text));e.env->DeleteLocalRef(text);e.check();
+      std::vector<std::uint8_t> result;if(bytes){const auto size=e.env->GetArrayLength(bytes);if(size==160*90*4){result.resize(size);e.env->GetByteArrayRegion(bytes,0,size,reinterpret_cast<jbyte*>(result.data()));}e.env->DeleteLocalRef(bytes);}return result;
+    };
     // Certificate extraction is initialized before the XR loop, never in a frame.
     Env e(vm_);
     auto pem = static_cast<jstring>(e.env->CallObjectMethod(activity_, certs_));

@@ -1,6 +1,6 @@
 # CyVR Player
 
-A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.11-alpha.1**.
+A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.12-alpha.1**.
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model. The current integration uses **CyVR_UI 0.8.0**, with static GPU scene buffers and its original PBR materials/offline lighting. These scene resources are excluded from strictly 2D builds.
 
@@ -30,7 +30,7 @@ The final command builds an alternative 2D-only APK with `CYVR_ENABLE_IMMERSIVE=
 
 Both APK variants keep `com.cyvr.player` and the existing development signing key, so `adb install -r` preserves app files and grants. They replace one another. Android API 32 and Horizon OS v69 or later are required. These are development builds, not store release packages.
 
-For the Android Alpha package, run `python tools/prepare_splats.py`, `python tools/build_codecs.py`, `python tools/build_subtitles.py --target android`, `python tools/build_discs.py --target android`, `python tools/build_ffmpeg_android.py --alpha`, then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.11-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
+For the Android Alpha package, run `python tools/prepare_splats.py`, `python tools/build_codecs.py`, `python tools/build_subtitles.py --target android`, `python tools/build_discs.py --target android`, `python tools/build_ffmpeg_android.py --alpha`, then `python tools/build_app.py --target android --alpha`. This separate Release profile produces `dist/android/CyVR_Player-0.4.12-alpha.1-arm64.apk`, disables Android debugging, and retains the existing development signing identity for upgrades. Alpha builds are for testing, not store submission. Use `python tools/verify_app.py --alpha` to validate the package. Release assets include the exact source snapshot of the player and its local MIT-licensed CyVR_UI foundation, dependency sources and build instructions. `CYVR_UI_ROOT` can select that supplied foundation when rebuilding.
 
 Prerequisites are the existing Android SDK (NDK 27.2.12479018, CMake 3.22.1, Build Tools 35.0.1, platform 34), JDK, LLVM/Windows C++ SDK, and the sibling `../CyVR_UI` checkout. `ANDROID_HOME`, `JAVA_HOME` and `CXX` can override tool locations. `CYVR_UI_ROOT` is the corresponding CMake setting. The local foundation includes the small reusable GPU/lifecycle extension hooks described in [the integration notes](docs/interface.md); retain those local changes when updating it.
 
@@ -44,7 +44,7 @@ python tools/build_ffmpeg_android.py
 
 ## Use and quality
 
-Open **CyVR Player** from Home or Overlay. Browse the app's own external folder, use **Allow a folder** for Android SAF access, or enter an HTTP(S), HLS or RTSP address in **Open stream**. Android VIEW intents are also supported. Display settings select mono, SBS or top/bottom, half-width/height packing, eye inversion and flat/180Â°/360Â° projection. Panoramic presentation requires immersion.
+Open **CyVR Player** from Home or Overlay. Browse the app's own external folder, use **Open a folder** for Android SAF access, or enter an HTTP(S), HLS or RTSP address in **Open stream**. Android VIEW intents are also supported. Display settings select mono, SBS or top/bottom, half-width/height packing, eye inversion and flat/180Â°/360Â° projection. Panoramic presentation requires immersion.
 
 **Display → Video format → Auto-detection: On/Off** controls automatic layout detection. It is **off by default**, including when migrating old checkpoints. With detection off, opening or inspecting another file retains the selected eye layout, projection, half packing and eye order. The preference survives activity changes and restart. **Detect once** applies the available metadata/name hints to the current media without enabling the preference.
 
@@ -72,6 +72,18 @@ In **Native** mode video stays at its **decoded source dimensions** through the 
 
 Container track selections, external subtitle URI, navigation, document URI, URL draft, stereo/projection settings, playback position, image corrections, filter, scale and zoom settings, and pause state are saved in private app storage across activity replacement and process restart. Shared CyVR_UI preferences preserve language and theme. Existing SAF grants and app files are retained.
 
+## Browser and placement controls
+
+The library offers **List** (seven items/page) and **Cards** (six items/page) views. The left sidebar switches between granted **Locations** and saved **Favorites**. **Open a folder** opens Android's folder chooser, retaining its read grant and other previously granted locations. Select the star to add/remove the current folder from up to 16 favorites. Favorites retain their known parent navigation; opening a different location starts its own navigation. These controls work in the 2D and immersive hosts. Android's storage restrictions still apply; the player does not bypass protected application directories. Folder listings are bounded to 10,000 entries.
+
+Previews remain visible while a video plays. A failed preview is retried instead of stored as a permanent empty cache entry. Android provider thumbnails and scaled frame extraction are preferred; a single background FFmpeg worker supplies a bounded fallback for sources up to 64 megapixels, including 8K. The provider request has a cancellation deadline; unsupported or unavailable files can still retain a placeholder. **Refresh** renews thumbnails. The runtime never downloads stream URLs for automatic previews.
+
+**Display → Video placement** controls cinema translation (±10 m) and yaw/pitch/roll (±180°). Panorama VR180/360 is rendered at infinity, so its page offers rotation and existing Zoom instead of ineffective translation controls. **Place in front of me** centers the video using the current headset pitch/roll as well as yaw, including reclining viewing. **Reset placement** clears manual offsets and legacy cinema tilt/elevation. These controls do not reposition the UI.
+
+**Keep placement on recenter** is on by default and prefers OpenXR's STAGE reference space when available. Known origin changes are rebased at their effective time; switching reference spaces preserves the movie pose. LOCAL remains a fallback. An unknown tracking-origin transform cannot guarantee physical continuity and produces a placement message. Settings persist across host changes; the actual tracking-space anchor is created for each new immersive session. See [OpenXR reference spaces](https://registry.khronos.org/OpenXR/specs/1.0/man/html/XrReferenceSpaceType.html).
+
+Compact controls include icons for the library, movie information, image filters, placement, cinema, tracks, settings and full interface, alongside transport and volume. Hovering an icon shows its action name. The larger interface retains text on format and cinema choices. **Settings** contains language, theme and player-local volume. Volume ranges from mute to unity gain; short callback ramps avoid abrupt changes and do not alter the media clock. Muting survives new decoders and host changes. The default language remains English, with French available.
+
 ## Audio playback
 
 Audio is decoded by FFmpeg and converted to interleaved 48 kHz stereo for AAudio. Surround downmix coefficients are normalized, with 1 dB of additional headroom for codec/resampling overshoot; stereo keeps unity gain. A finite/full-scale safety check protects the native output. This is stereo playback, without head-tracked spatial-audio rendering.
@@ -82,7 +94,7 @@ The worker prebuffers 120 ms before starting audio and reads ahead toward 250 ms
 
 ## Image controls and previews
 
-The library shows **static 160 x 90 video thumbnails**, decoded on one background worker with one software thread. The worker only requests the current seven rows, keeps at most 32 entries in memory (including failed files), cancels obsolete requests and pauses thumbnail requests during playback. It supports local files and authorized SAF descriptors. It does not auto-fetch stream URLs. Unsupported or over-budget files keep a type placeholder. No continuous animated preview is decoded.
+The library shows **static 160 x 90 video thumbnails** from one background worker. It requests the visible seven list rows or six cards, retains at most 32 successful previews, retries transient failures and cancels obsolete requests. Android provider thumbnails and scaled extraction are preferred, with a one-thread FFmpeg fallback. Previews remain available during playback. Local files and authorized SAF descriptors are supported; stream URLs are not fetched automatically. Unsupported or over-budget files keep a type placeholder. No continuous animated preview is decoded.
 
 **Display â†’ Image corrections** provides exposure (âˆ’2 to +2 EV), contrast, saturation, gamma, zoom (1â€“4x), and horizontal/vertical position. Reset restores neutral values. In 2D, zoom crops within the video, preserving the aspect ratio and eye boundaries. In immersive flat cinema, zoom enlarges the physical screen while retaining the complete picture; position moves that screen. Panorama zoom is a digital per-eye crop. Changes also redraw an already-paused frame without resuming decoding.
 

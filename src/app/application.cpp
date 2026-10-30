@@ -78,11 +78,11 @@ struct PlayerApplication::BrowserWorker {
           if (!platform.documents)
             throw MediaError("Android document provider unavailable");
           result = platform.documents(path);
-          message = std::to_string(result.size()) + " items / 512 maximum";
+          message = std::to_string(result.size()) + " items / 10000 maximum";
         } else {
           FileBrowser browser(platform.root);
           BrowseOptions options;
-          options.max_entries = 512;
+          options.max_entries = 10000;
           const auto listing =
               browser.list(std::filesystem::u8path(path).lexically_relative(
                                std::filesystem::u8path(platform.root)),
@@ -115,6 +115,8 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
       previews_(std::make_unique<PreviewWorker>(platform_)) {
   page_ = int(ui_.page);
   ui_.renderApplication = [this](cyvr::DrawList &d) { return draw(d); };
+  ui_.renderApplicationDock=[this](cyvr::DrawList& d){return draw_dock(d);};
+  refresh_locations();
   ui_.renderApplicationDebug = [this](cyvr::DrawList &d) {
     return draw_performance(d);
   };
@@ -183,7 +185,7 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
 }
 PlayerApplication::~PlayerApplication() {
   save();
-  ui_.renderApplication = {};
+  ui_.renderApplication = {};ui_.renderApplicationDock={};
   ui_.renderApplicationDebug = {};
   ui_.handleApplicationAction = {};
   ui_.handleApplicationSlider = {};
@@ -193,7 +195,7 @@ PlayerApplication::~PlayerApplication() {
   ui_.compactInterface = false;
 }
 void PlayerApplication::browse(std::string path) {
-  directory_ = std::move(path);
+  directory_ = std::move(path);folder_name_.clear();refresh_locations();
   offset_ = 0;
   entries_.clear();
   preview_present_.fill(false);
@@ -272,7 +274,7 @@ void PlayerApplication::tick() {
       if (browse_status_ != "Reading folder...")
         offset_ = std::min(offset_, entries_.empty()
                                         ? 0
-                                        : ((int(entries_.size()) - 1) / 7) * 7);
+                                        : ((int(entries_.size()) - 1) / browser_page_size()) * browser_page_size());
       ui_.invalidate();
     }
   }
@@ -280,8 +282,8 @@ void PlayerApplication::tick() {
                          std::chrono::steady_clock::now().time_since_epoch())
                          .count();
   std::vector<std::string> requests;
-  if (page_ == 0 && !state_.playing && !suspended_) {
-    for (int row = 0; row < 7; ++row) {
+  if (page_ == 0 && !suspended_) {
+    for (int row = 0; row < browser_page_size(); ++row) {
       const auto n = offset_ + row;
       requests.push_back(n < int(entries_.size()) && !entries_[n].directory &&
                                  classify_extension(entries_[n].name) ==
@@ -290,7 +292,7 @@ void PlayerApplication::tick() {
                              : "");
     }
   }
-  if (requests != preview_requests_) {
+  if (page_==0 && requests != preview_requests_) {
     preview_requests_ = requests;
     previews_->request(std::move(requests));
   }
@@ -368,9 +370,9 @@ bool PlayerApplication::action(int id) {
   cancel_scrub();
   if(id>=1400 && id<1440)return track_action(id);
   if((id>=1030 && id<=1032) || (id>=1040 && id<=1042) || id==1051 || id==1052)format_manual_=true;
-  if (id >= 1000 && id <= 1003) {
+  if (id >= 1000 && id <= 1004) {
     controls_.expand(controls_now());
-    page_ = id - 1000;
+    page_ = id - 1000;ui_.compactInterface=false;
     ui_.page = cyvr::Page(page_);
     state_dirty_ = true;
     ui_.invalidate();
@@ -380,22 +382,29 @@ bool PlayerApplication::action(int id) {
     auto parent = parents_.back();
     parents_.pop_back();
     browse(parent);
-  } else if (id == 1011)
-    browse(directory_);
+  } else if (id == 1011) {
+    previews_->request(preview_requests_,true);browse(directory_);preview_requests_.clear();
+  }
   else if (id == 1012 && platform_.request_tree)
     platform_.request_tree();
   else if (id == 1013) {
-    offset_ = std::max(0, offset_ - 7);
+    offset_ = std::max(0, offset_ - browser_page_size());
     preview_present_.fill(false);
   } else if (id == 1014) {
-    offset_ += 7;
+    offset_ += browser_page_size();
     preview_present_.fill(false);
-  } else if (id >= 1100 && id < 1107 &&
+  } else if(id==1015 || id==1016){browser_view_=id-1015;offset_=(offset_/browser_page_size())*browser_page_size();preview_requests_.clear();}
+  else if(id==1017)toggle_favorite();
+  else if(id==1018 || id==1019){sidebar_tab_=id-1018;sidebar_offset_=0;refresh_locations();}
+  else if(id==1026)sidebar_offset_=std::max(0,sidebar_offset_-7);
+  else if(id==1027)sidebar_offset_+=7;
+  else if(id>=1800 && id<1807){const auto index=sidebar_offset_+id-1800;if(sidebar_tab_){if(index<int(favorites_.size())){auto favorite=favorites_[index];browse(favorite.location);parents_=favorite.parents;folder_name_=favorite.name;}}else if(index<int(locations_.size())){parents_.clear();browse(locations_[index].location);}}
+  else if (id >= 1100 && id < 1107 &&
              offset_ + id - 1100 < int(entries_.size())) {
     auto item = entries_[offset_ + id - 1100];
     if (item.directory) {
       parents_.push_back(directory_);
-      browse(item.location);
+      browse(item.location);folder_name_=item.name;
     } else if(classify_extension(item.name)==FileKind::key){
       if(session_.clearkey_file(item.location)){page_=1;ui_.page=cyvr::Page(1);tracks_open_=true;track_tab_=0;controls_.expand(controls_now());}
       else ui_.setToast(std::string(tr("Open a video before choosing a ClearKey file.")));
@@ -442,7 +451,7 @@ bool PlayerApplication::action(int id) {
     half_stereo = !half_stereo;
   else if (id == 1052)
     swap_eyes = !swap_eyes;
-  else if (id >= 1300 && id <= 1303)
+  else if (id >= 1300 && id <= 1304)
     display_tab_ = id - 1300;
   else if(id>=1610 && id<=1617)cinema.environment=id-1610;
   else if(id==1620)cinema.curvature=0;
@@ -467,7 +476,15 @@ bool PlayerApplication::action(int id) {
   } else if (id == 1353) {
     image.sampling=0;image.denoise=0;image.detail=0;
     ++processing_request;
-  } else if (id == 1330) {
+  } else if(id==1681){scene.reset();cinema.elevation=cinema.pitch=cinema.roll=0;}
+  else if(id==1682){scene.stable=!scene.stable;}
+  else if(id==1683){scene.reset();cinema.elevation=cinema.pitch=cinema.roll=0;image.pan_x=image.pan_y=0;++video_placement_request;}
+  else if(id==1680 || (id>=1364 && id<=1369)){
+    controls_.expand(controls_now());ui_.compactInterface=false;
+    if(id==1364)page_=0;else if(id==1365){page_=1;tracks_open_=false;}else if(id==1368){page_=1;tracks_open_=true;}else if(id==1369)page_=4;else{page_=3;display_tab_=(id==1367 || id==1680)?4:2;}ui_.page=cyvr::Page(page_);
+  } else if(id==1370){if(volume>0){unmuted_volume_=volume;volume=0;}else volume=unmuted_volume_;session_.volume(volume);}
+  else if(id==1063){page_=4;ui_.page=cyvr::Page(4);controls_.expand(controls_now());ui_.compactInterface=false;}
+  else if (id == 1330) {
     image = ImageSettings{};
     ++processing_request;
   } else if (id == 1331)
@@ -541,7 +558,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
-  s.display_tab = display_tab_;
+  s.display_tab = display_tab_;s.browser_view=browser_view_;s.favorites=favorites_;s.scene=scene;s.volume=volume;
   s.shift = shift_;
   s.symbols = symbols_;
   s.position_us =
@@ -577,7 +594,7 @@ bool PlayerApplication::restore(bool resume_media) {
   swap_eyes = s.swap_eyes;
   image = s.image;
   cinema=s.cinema;cinema.sanitize();ambilight=s.ambilight;ambilight.sanitize();cinema_tab_=std::clamp(s.cinema_tab,0,2);
-  display_tab_ = s.display_tab;
+  display_tab_ = s.display_tab;browser_view_=s.browser_view;favorites_=s.favorites;scene=s.scene;volume=s.volume;session_.volume(volume);
   tracks_open_=s.tracks_open;track_tab_=s.track_tab;track_offset_=s.track_offset;
   shift_ = s.shift;
   symbols_ = s.symbols;
@@ -649,6 +666,13 @@ bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
       case 1652:ambilight.inset=.2f*f;break;
     }
     cinema.sanitize();ambilight.sanitize();state_dirty_=true;ui_.invalidate();return true;
+  }
+  if(id==1371 || (id>=1690 && id<=1695)){
+    if(phase==cyvr::SliderPhase::Cancel || !std::isfinite(fraction))return true;
+    const auto f=std::clamp(fraction,0.f,1.f);
+    if(id==1371){volume=f;if(volume>0)unmuted_volume_=volume;session_.volume(volume);}
+    else{float* values[]{&scene.x,&scene.y,&scene.z,&scene.yaw,&scene.pitch,&scene.roll};*values[id-1690]=(id<1693?20.f:360.f)*(f-.5f);scene.sanitize();}
+    state_dirty_=true;ui_.invalidate();return true;
   }
   if (id >= 1340 && id <= 1349) {
     if (phase == cyvr::SliderPhase::Cancel || !std::isfinite(fraction))
