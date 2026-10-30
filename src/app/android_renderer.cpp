@@ -609,6 +609,12 @@ public:
       if (app->projection) {
         auto &s = spheres_[eye];
         s = {XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR};
+        // The shader keeps edge RGB below transparent coverage for filters.
+        // Native VR180 must request straight-alpha composition as well, or
+        // the compositor would display those edge pixels around a zoomed-out picture.
+        if(app->projection==1 && app->image.zoom<1)
+          s.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                       XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
         s.space = q.space;
         s.eyeVisibility = q.eyeVisibility;
         s.subImage = q.subImage;
