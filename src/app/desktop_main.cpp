@@ -55,6 +55,7 @@ struct Desktop {
         Platform platform;
         platform.root = std::filesystem::absolute(std::filesystem::u8path(root)).u8string();
         app = std::make_unique<PlayerApplication>(ui, std::move(platform));
+        app->set_logo(readAsset("branding/player-logo.rgba"));
     }
     void tick() {
         ui.tick(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
@@ -69,7 +70,7 @@ struct Desktop {
                 app->session().frame_submitted(scene.epoch,scene.pts_us);
             }
         }else if(splats){renderer.setVideoTexture();splats.reset();drawnSplat.reset();app->preview_ready=false;ui.invalidate();}
-        std::vector<uint8_t> thumbnails;if(app->take_thumbnails(thumbnails))renderer.uploadImages(160,630,thumbnails);
+        std::vector<uint8_t> thumbnails;if(app->take_thumbnails(thumbnails))renderer.uploadImages(ui_atlas_width,ui_atlas_height,thumbnails);
         if (revision != ui.revision)
             InvalidateRect(window, nullptr, FALSE);
     }
@@ -229,7 +230,7 @@ int main(int argc, char **argv) {
                 desktop.app->tick();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            std::vector<uint8_t> thumbnails;if(desktop.app->take_thumbnails(thumbnails))desktop.renderer.uploadImages(160,630,thumbnails);
+            std::vector<uint8_t> thumbnails;if(desktop.app->take_thumbnails(thumbnails))desktop.renderer.uploadImages(ui_atlas_width,ui_atlas_height,thumbnails);
             desktop.draw();
             std::ofstream out(snapshot, std::ios::binary);
             out << "P6\n1440 " << height << "\n255\n";

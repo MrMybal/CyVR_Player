@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from foundation_sources import sources as foundation_sources
@@ -33,6 +34,7 @@ def configure(target,immersive=True,alpha=False):
     common=[CMAKE,'-S',ROOT,'-B',directory,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={NINJA}',
         '-DCMAKE_BUILD_TYPE='+('Release' if alpha else 'RelWithDebInfo'),'-DCYVR_PLAYER_WITH_FFMPEG=ON','-DCYVR_PLAYER_BUILD_APP=ON',
         f'-DCYVR_UI_ROOT={UI}',
+        f'-DPython3_EXECUTABLE:FILEPATH={sys.executable}',
         '-DCYVR_ENABLE_IMMERSIVE='+('ON' if immersive else 'OFF'),
         f'-DCYVR_APP_GLSLC={NDK / "shader-tools/windows-x86_64/glslc.exe"}',
         f'-DCYVR_PLAYER_GLSLC={NDK / "shader-tools/windows-x86_64/glslc.exe"}',
@@ -105,7 +107,9 @@ def android(immersive=True,alpha=False):
                 if activity.get('{http://schemas.android.com/apk/res/android}name','').endswith('.ImmersiveActivity'):application.remove(activity)
             for query in list(tree.getroot().findall('queries')):tree.getroot().remove(query)
         manifest=directory/'AndroidManifest.xml';tree.write(manifest,encoding='utf-8',xml_declaration=True)
-    run(BUILD_TOOLS/'aapt2.exe','link','-o',resources,'-I',ANDROID_JAR,'--manifest',manifest,'-A',directory/'assets')
+    compiled_resources=directory/'branding-res.zip'
+    run(BUILD_TOOLS/'aapt2.exe','compile','--dir',directory/'branding/res','-o',compiled_resources)
+    run(BUILD_TOOLS/'aapt2.exe','link','-o',resources,'-I',ANDROID_JAR,'--manifest',manifest,'-A',directory/'assets',compiled_resources)
     unsigned=directory/'unsigned.apk'
     with zipfile.ZipFile(resources) as source,zipfile.ZipFile(unsigned,'w') as archive:
         for item in source.infolist():archive.writestr(item.filename,source.read(item.filename),compress_type=item.compress_type)

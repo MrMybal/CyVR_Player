@@ -9,6 +9,7 @@
 #include "cyvr/player/track_selection.hpp"
 #include "cyvr/player/splats.hpp"
 #include "cyvr/player/icons.hpp"
+#include "cyvr/player/branding.hpp"
 #include <functional>
 #include <memory>
 #ifdef __ANDROID__
@@ -120,7 +121,8 @@ public:
   bool half_stereo{}, swap_eyes{};
   ImageSettings image;
   void video_input(float seek, float zoom, float pan_x = 0, float pan_y = 0);
-  // Visible-page thumbnails, tightly packed in a 7 x 160x90 atlas.
+  void set_logo(const std::vector<std::uint8_t>& rgba);
+  // Shared UI atlas: visible-page thumbnails and a static branding tile.
   bool take_thumbnails(std::vector<std::uint8_t> &rgba, bool force = false);
   const std::string &location() const { return directory_; }
 
@@ -137,6 +139,7 @@ private:
   std::vector<std::uint8_t> thumbnail_atlas_;
   std::uint64_t preview_revision_{};
   bool thumbnail_dirty_{};
+  bool logo_ready_{};
   std::vector<BrowserItem> entries_;
   std::vector<std::string> parents_;
   std::string directory_, browse_status_, url_;

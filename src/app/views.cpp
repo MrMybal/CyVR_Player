@@ -148,8 +148,9 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                             : 0x182228,
                     ui_.settings.highContrast ? 1 : ui_.settings.opacity),
          30);
-  d.text(32, 22, 34, "CyVR Player", white);
-  d.text(270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
+  if(logo_ready_)d.image({24,10,76,76},{.5f/ui_atlas_width,(logo_atlas_y+.5f)/ui_atlas_height,159.f/ui_atlas_width,159.f/ui_atlas_height});
+  d.text(logo_ready_?112:32, 22, 34, "CyVR Player", white);
+  d.text(logo_ready_?358:270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
   if(immersive && state_.ready)icon_button(d,1361,{1174,18,62,60},Icon::Minimize,"Compact controls");
   icon_button(d,1063,{1250,18,62,60},Icon::Settings,"Settings",page_==4);
   icon_button(d,1062,{1330,18,62,60},immersive?Icon::Window:Icon::Headset,immersive?"Return to 2D":"Enter immersive",false,immersive||ui_.immersiveAvailable);

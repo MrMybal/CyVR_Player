@@ -40,9 +40,16 @@ def main():
     assert all('android.app.lib_name' in activity and '="cyvr_player"' in activity for activity in activities)
     assert ('com.cyvr.player.ImmersiveActivity' in manifest)==(not args.panel_only)
     assert ('org.khronos.openxr.runtime_broker' in manifest)==(not args.panel_only)
+    assert 'android:icon' in manifest and 'android:roundIcon' in manifest
     libraries=[]
     with zipfile.ZipFile(apk) as archive,apk.open('rb') as raw:
         names=set(archive.namelist())
+        assert len(archive.read('assets/branding/player-logo.rgba'))==160*160*4
+        for icon in ('ic_launcher','ic_launcher_round'):
+            resource='res/mipmap-anydpi-v26/'+icon+'.xml'
+            assert resource in names,resource
+            xml=subprocess.check_output([str(sdk/'build-tools/35.0.1/aapt2.exe'),'dump','xmltree',str(apk),'--file',resource],text=True)
+            assert 'adaptive-icon' in xml and 'background' in xml and 'foreground' in xml
         if not args.panel_only:
             expected_pbr={'basecolor','normal-rough-metal','brdf','lounge','observatory','terrace','lighting-lounge','lighting-observatory','lighting-terrace'}
             for material in expected_pbr:

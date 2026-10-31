@@ -24,7 +24,7 @@ extern "C" void android_main(android_app *android) {
         [&] { return current; }, bridge.presentation_mode() == 1);
     cyvr::AndroidAppConfig config;
     config.name = "CyVR Player";
-    config.version = 18;
+    config.version = 19;
     config.immersiveEnabled = CYVR_ENABLE_IMMERSIVE;
     config.nativeResolution = true;
     config.viewFallback = true;

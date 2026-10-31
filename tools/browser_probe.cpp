@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
       app.tick();
       if (app.take_thumbnails(rgba) && !rgba.empty() && rgba[3] == 255) {
         unsigned nonblack = 0;
-        for (size_t n = 0; n < rgba.size(); n += 4)
+        for (size_t n = 0; n < 160 * 90 * 4; n += 4)
           if (rgba[n] > 16 || rgba[n + 1] > 16 || rgba[n + 2] > 16)
             ++nonblack;
         if (nonblack < 160 * 90 / 4)

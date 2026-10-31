@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 namespace cyvr::player {
@@ -113,6 +114,8 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
     : ui_(ui), platform_(std::move(p)), session_(platform_),
       browser_(std::make_unique<BrowserWorker>(platform_)),
       previews_(std::make_unique<PreviewWorker>(platform_)) {
+  thumbnail_atlas_.resize(ui_atlas_width*ui_atlas_height*4);
+  thumbnail_dirty_=true;
   page_ = int(ui_.page);
   ui_.renderApplication = [this](cyvr::DrawList &d) { return draw(d); };
   ui_.renderApplicationDock=[this](cyvr::DrawList& d){return draw_dock(d);};
@@ -301,7 +304,7 @@ void PlayerApplication::tick() {
     if (lock.owns_lock() && preview_revision_ != previews_->revision) {
       preview_revision_ = previews_->revision;
       preview_present_ = previews_->present;
-      thumbnail_atlas_ = previews_->atlas;
+      std::copy(previews_->atlas.begin(),previews_->atlas.end(),thumbnail_atlas_.begin());
       thumbnail_dirty_ = true;
       ui_.invalidate();
     }
@@ -787,6 +790,11 @@ void PlayerApplication::video_input(float seek, float zoom, float x, float y) {
   image.sanitize();
   state_dirty_ = true;
   ui_.invalidate();
+}
+void PlayerApplication::set_logo(const std::vector<std::uint8_t>& rgba) {
+  if(rgba.size()!=logo_size*logo_size*4)throw std::invalid_argument("Invalid player logo dimensions");
+  std::copy(rgba.begin(),rgba.end(),thumbnail_atlas_.begin()+logo_atlas_y*ui_atlas_width*4);
+  logo_ready_=true;thumbnail_dirty_=true;ui_.invalidate();
 }
 bool PlayerApplication::take_thumbnails(std::vector<std::uint8_t> &rgba,
                                         bool force) {

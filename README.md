@@ -1,10 +1,16 @@
+<p align="center">
+  <img src="assets/branding/cyvr-player-logo-orange-coral-v1.png" width="160" alt="CyVR Player logo" />
+</p>
+
 # CyVR Player
 
-A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.12-alpha.1**.
+A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI foundation](https://github.com/MrMybal/CyVR_UI). Alpha version: **0.4.12-alpha.2**.
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model. The current integration uses **CyVR_UI 0.8.0**, with static GPU scene buffers and its original PBR materials/offline lighting. These scene resources are excluded from strictly 2D builds.
 
 ## Build
+
+The branding resource step requires Pillow (`python -m pip install Pillow`) at build time. The runtime remains native C++/Vulkan.
 
 From PowerShell in this folder:
 

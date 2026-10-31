@@ -80,7 +80,7 @@ int main() {
       std::vector<std::uint8_t> thumbnails;
       wait([&] {
         return app.take_thumbnails(thumbnails) &&
-               thumbnails.size() == 160 * 630 * 4 &&
+               thumbnails.size() == ui_atlas_width * ui_atlas_height * 4 &&
                thumbnails[(160 * 90 + 1) * 4 + 3] == 255;
       });
       click(1100);

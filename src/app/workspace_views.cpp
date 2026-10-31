@@ -148,7 +148,7 @@ void PlayerApplication::draw_library(cyvr::DrawList &d) {
     const auto kind = classify_extension(item.name);
     if (preview_present_[row] && !item.directory)
       d.image(preview,
-              {.5f / 160, (row * 90 + .5f) / 630, 159.f / 160, 89.f / 630});
+              {.5f / 160, (row * 90 + .5f) / ui_atlas_height, 159.f / 160, 89.f / ui_atlas_height});
     else {
       d.rect(preview, Color::hex(light ? 0xb4cbd3 : 0x14242e), 8);
       draw_icon(d,

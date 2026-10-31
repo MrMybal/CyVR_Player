@@ -46,7 +46,12 @@ if(CYVR_PLAYER_BUILD_APP)
     add_subdirectory("${CYVR_UI_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/cyvr-ui" EXCLUDE_FROM_ALL)
     add_library(cyvr_player_ui ALIAS cyvr_gpu)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets")
-    set(app_assets)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(branding "${CMAKE_CURRENT_BINARY_DIR}/branding")
+    add_custom_command(OUTPUT "${branding}/player-logo.rgba" "${branding}/branding.stamp"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_branding.py" --output "${branding}"
+        DEPENDS tools/prepare_branding.py assets/branding/cyvr-player-logo-orange-coral-v1.png VERBATIM)
+    set(app_assets "${branding}/player-logo.rgba" "${branding}/branding.stamp")
     foreach(shader video.vert video.frag video_filter.frag ambilight.frag)
         set(output "${CMAKE_CURRENT_BINARY_DIR}/assets/${shader}.spv")
         add_custom_command(OUTPUT "${output}" COMMAND "${CYVR_APP_GLSLC}" --target-env=vulkan1.1 -O
@@ -60,6 +65,9 @@ if(CYVR_PLAYER_BUILD_APP)
             "${CMAKE_CURRENT_BINARY_DIR}/cyvr-ui/assets" "${CMAKE_CURRENT_BINARY_DIR}/assets"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CYVR_UI_ROOT}/assets/fonts/NotoSans-Regular.ttf" "${CMAKE_CURRENT_BINARY_DIR}/assets/subtitle-font.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/branding"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${branding}/player-logo.rgba" "${CMAKE_CURRENT_BINARY_DIR}/assets/branding/player-logo.rgba"
         DEPENDS ${app_assets})
     add_dependencies(cyvr_player_app_assets cyvr_assets)
     add_library(cyvr_player_application STATIC src/app/application.cpp src/app/previews.cpp src/app/workspace_views.cpp src/app/views.cpp src/app/tracks.cpp src/app/session.cpp src/app/state.cpp src/app/locale.cpp)

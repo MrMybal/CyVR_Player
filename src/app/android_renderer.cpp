@@ -182,6 +182,7 @@ public:
     upload_thumbnails_ = true;
     format_ = format;
     assets_ = assets;
+    if(auto app=application_())app->set_logo(assets("branding/player-logo.rgba"));
     if (!sampler_) {
       VkSamplerCreateInfo s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
       s.magFilter = s.minFilter = VK_FILTER_LINEAR;
@@ -277,7 +278,7 @@ public:
       return false;
     std::vector<std::uint8_t> thumbnails;
     if (uiRenderer_ && app->take_thumbnails(thumbnails, upload_thumbnails_)) {
-      uiRenderer_->uploadImages(160, 630, thumbnails);
+      uiRenderer_->uploadImages(ui_atlas_width, ui_atlas_height, thumbnails);
       upload_thumbnails_ = false;
       unsigned count = 0;
       for (unsigned row = 0; row < 7; ++row)
