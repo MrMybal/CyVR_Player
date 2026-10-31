@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--probe",type=Path,default=ROOT/"build/host-clang/cyvr_media_probe.exe")
+    parser.add_argument("--probe",type=Path,default=ROOT/"build/app-windows/cyvr_media_probe.exe")
     args=parser.parse_args()
     ffmpeg=ROOT/".deps/ffmpeg/windows/bin/ffmpeg.exe"
     fixtures=ROOT/"build/media-fixtures"
@@ -60,7 +60,12 @@ def main():
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self,*args): pass
         def do_GET(self):
-            if self.path=="/stall":
+            if self.path=="/web-only.mp4":
+                # Stands in for a site that serves its video only to its own pages.
+                if self.headers.get("Referer")!="https://site.test/" or "session=abc" not in self.headers.get("Cookie",""):
+                    self.send_error(403);return
+                self.path="/sample.mp4";super().do_GET()
+            elif self.path=="/stall":
                 self.send_response(200);self.send_header("Content-Type","video/mp4")
                 self.send_header("Content-Length","1000000");self.end_headers()
                 self.server.release_stalls.wait(5)
@@ -93,6 +98,11 @@ def main():
         data,elapsed=run("Cancel blocked network read",base+"/stall","--timeout-ms","5000","--cancel-after-ms","150",success=False)
         assert "cancelled" in data["error"] and elapsed<2,data
         run("HTTP 404 propagates an error",base+"/missing.mp4",success=False)
+        run("Web video is refused without its page's request settings",base+"/web-only.mp4",success=False)
+        data,_=run("Web video plays with Referer and scoped cookies",base+"/web-only.mp4","--decode","--http-header","Referer: https://site.test/",
+            "--http-cookie",f"session=abc; path=/; domain=127.0.0.1:{server.server_port}");complete(data)
+        run("Cookies stay with their domain",base+"/web-only.mp4","--http-header","Referer: https://site.test/",
+            "--http-cookie","session=abc; path=/; domain=other.test",success=False)
         run("Network HLS cannot open local files",base+"/escape.m3u8",success=False)
     finally:
         server.release_stalls.set();server.shutdown();server.server_close();worker.join()
@@ -106,6 +116,15 @@ def main():
     tls_worker=threading.Thread(target=tls.serve_forever,daemon=True);tls_worker.start()
     try:
         run("HTTPS rejects an untrusted certificate",f"https://127.0.0.1:{tls.server_port}/sample.mp4",success=False)
+        # HLS opens segments with options of its own; the first request's verification does not carry over.
+        (fixtures/"nested-tls.m3u8").write_text("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:0.5,\n"+
+            f"https://127.0.0.1:{tls.server_port}/part00.ts\n#EXT-X-ENDLIST\n")
+        plain=http.server.ThreadingHTTPServer(("127.0.0.1",0),functools.partial(Handler,directory=str(fixtures)))
+        plain.daemon_threads=True;plain_worker=threading.Thread(target=plain.serve_forever,daemon=True);plain_worker.start()
+        try:
+            data,_=run("HLS segments verify their own certificate",f"http://127.0.0.1:{plain.server_port}/nested-tls.m3u8","--decode",success=False)
+        finally:
+            plain.shutdown();plain.server_close();plain_worker.join()
     finally:
         tls.shutdown();tls.server_close();tls_worker.join()
     report={"engine":"cyvr_media_probe","platform":"Windows x64","checks":checks,

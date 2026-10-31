@@ -49,8 +49,8 @@ def main():
                 iw,ih,ow,oh=map(int,m.groups());assert max(ow,oh)<=1600
                 passed('panel-default-filter',source=dimensions,quality=quality,input=[iw,ih],output=[ow,oh])
                 if not args.panel_only:
-                    tap(1280,48)
-                    line=wait(lambda:next((line for line in logs().splitlines() if f'VIEW_ENHANCEMENT quality={quality} source={dimensions}' in line),''),'Per-eye reconstruction did not appear')
+                    tap(1361,48)
+                    line=wait(lambda:next((line for line in logs().splitlines() if f'IMAGE_APPLIED quality={quality} source={dimensions}' in line and 'host=immersive' in line),''),'Cinema screen filter did not appear')
                     m=re.search(r'input=(\d+)x(\d+) output=(\d+)x(\d+)',line);assert m
                     iw,ih,ow,oh=map(int,m.groups());assert max(ow,oh)<4096
                     passed('immersive-default-filter',source=dimensions,quality=quality,input=[iw,ih],output=[ow,oh])

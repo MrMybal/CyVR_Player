@@ -4,6 +4,8 @@
 namespace cyvr::player {
 struct PlayerMessage { std::string_view english, french; };
 inline constexpr PlayerMessage player_messages[] = {
+    {"120 Hz for 60 fps video: Off", "120 Hz pour vidéo 60 fps : désactivé"},
+    {"120 Hz for 60 fps video: On", "120 Hz pour vidéo 60 fps : activé"},
     {"2D video", "Vidéo 2D"},
     {"3D side by side (SBS)", "3D côte à côte (SBS)"},
     {"3D top / bottom (TB)", "3D haut / bas (TB)"},
@@ -243,6 +245,7 @@ inline constexpr PlayerMessage player_messages[] = {
     {"Video: distinct frames; VR redraws are separate.", "Vidéo : images distinctes, hors répétitions VR."},
     {"Viewing distance (m)", "Distance de vision (m)"},
     {"Volume", "Volume"},
+    {"Web browser", "Navigateur web"},
     {"YOUR VIDEO LIBRARY", "VOTRE VIDÉOTHÈQUE"},
     {"Yaw (degrees)", "Orientation (degrés)"},
     {"Your next screening", "Votre prochaine séance"},

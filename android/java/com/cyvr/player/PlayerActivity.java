@@ -13,6 +13,11 @@ import java.util.ArrayList;
 /** Android system access only. The player UI is entirely C++ / CyVR_UI. */
 public class PlayerActivity extends NativeActivity {
     private static java.lang.ref.WeakReference<PlayerActivity> active=new java.lang.ref.WeakReference<>(null);
+    private static Uri viewedDocument;
+    // Settings for the video last sent by the browser window. Memory only: they
+    // can hold session cookies, and they must survive a change of host.
+    private static String webUrl="";
+    private static String[] webSettings={"","",""};
     private final ArrayDeque<String[]> events=new ArrayDeque<>();
     private CancellationSignal query;
     private final java.util.concurrent.ExecutorService cancellationWorker=java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -23,7 +28,14 @@ public class PlayerActivity extends NativeActivity {
         if(previous!=null && previous!=this && previous.presentationMode()!=presentationMode() && !previous.isFinishing())
             previous.finishAndRemoveTask();
         active=new java.lang.ref.WeakReference<>(this);
-        acceptIntent(getIntent());super.onCreate(state);
+        // A process restored from Recents resumes its checkpoint, not the old VIEW.
+        if(state==null && (getIntent().getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)==0)acceptIntent(getIntent());
+        super.onCreate(state);
+    }
+    /** A VIEW grant belongs to the receiving activity; the next host must inherit it. */
+    private Intent carryDocument(Intent next){
+        if(viewedDocument!=null)next.setData(viewedDocument).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return next;
     }
     public int presentationMode(){return 0;}
     public int initialPage(){return getIntent().getIntExtra("cyvr.page",0);}
@@ -31,11 +43,13 @@ public class PlayerActivity extends NativeActivity {
         if(mode==1){
             Intent immersive=new Intent(this,ImmersiveActivity.class).setAction(Intent.ACTION_MAIN)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("cyvr.page",page);
-            startActivity(immersive);finishAndRemoveTask();
+            try{startActivity(carryDocument(new Intent(immersive)));}
+            catch(SecurityException e){startActivity(immersive);}
+            finishAndRemoveTask();
         }else{
             Intent panel=new Intent(this,PanelActivity.class).setAction(Intent.ACTION_MAIN)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("cyvr.page",page);
-            PendingIntent pending=PendingIntent.getActivity(this,0,panel,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+            PendingIntent pending=PendingIntent.getActivity(this,0,carryDocument(panel),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
             Intent home=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .putExtra("extra_launch_in_home_pending_intent",pending);
             startActivity(home);finishAndRemoveTask();
@@ -67,8 +81,21 @@ public class PlayerActivity extends NativeActivity {
     }
     @Override public void onBackPressed(){enqueue("back","","");}
     private void acceptIntent(Intent intent) {
-        if (intent!=null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData()!=null)
-            enqueue("open",intent.getData().toString(),"External video");
+        if (intent==null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData()==null) return;
+        Uri data=intent.getData();
+        String scheme=data.getScheme();
+        if (scheme!=null && !"content".equals(scheme) && !"https".equals(scheme) && !"http".equals(scheme) && !"rtsp".equals(scheme)) return;
+        viewedDocument=null;
+        if ("content".equals(scheme)) {
+            viewedDocument=data;
+            if ((intent.getFlags()&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0) {
+                try {getContentResolver().takePersistableUriPermission(data,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+                catch(SecurityException e){/* The temporary grant still covers this activity. */}
+            }
+        }
+        if(intent.hasExtra("cyvr.agent"))acceptWebRequest(intent,data);
+        String title=intent.getStringExtra("cyvr.title");
+        enqueue("open",data.toString(),title==null||title.isEmpty()?"External video":title);
     }
     private synchronized void enqueue(String type,String value,String name) {if(events.size()<16)events.add(new String[]{type,value,name});}
     public synchronized String[] pollEvent() {return events.poll();}
@@ -86,6 +113,24 @@ public class PlayerActivity extends NativeActivity {
                 enqueue("tree",data.getData().toString(),"Authorized folder");
             }catch(Exception e){enqueue("error","Android denied access to this folder.","");}
         }
+    }
+    public void openBrowser(final String language){runOnUiThread(()->
+        startActivity(new Intent(this,BrowserActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("cyvr.language",language)));}
+    public String[] webRequest(String url){return url.equals(webUrl)?webSettings:new String[]{"","",""};}
+    private static String singleLine(String value){return value==null?"":value.replace("\r","").replace("\n","");}
+    private void acceptWebRequest(Intent intent,Uri data){
+        webUrl=data.toString();
+        String headers=singleLine(intent.getStringExtra("cyvr.referer"));
+        if(!headers.isEmpty())headers="Referer: "+headers+"\r\n";
+        // One domain-scoped entry per cookie: FFmpeg then sends them to this host only.
+        StringBuilder cookies=new StringBuilder();
+        // FFmpeg compares cookie domains with the host and any explicit port.
+        String host=data.getPort()>=0?data.getHost()+":"+data.getPort():data.getHost();
+        if(host!=null)for(String cookie:singleLine(intent.getStringExtra("cyvr.cookies")).split(";")){
+            String value=cookie.trim();
+            if(value.indexOf('=')>0)cookies.append(value).append("; path=/; domain=").append(host).append('\n');
+        }
+        webSettings=new String[]{headers,singleLine(intent.getStringExtra("cyvr.agent")),cookies.toString()};
     }
     public String savedTree(){
         android.content.SharedPreferences shared=getSharedPreferences("player",0);

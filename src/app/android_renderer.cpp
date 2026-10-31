@@ -9,6 +9,8 @@
 #include <android/log.h>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #if CYVR_ENABLE_IMMERSIVE
 #include "cyvr/android_xr.hpp"
 #include <openxr/openxr_platform.h>
@@ -66,7 +68,10 @@ class Renderer final : public Base {
   TimeSamples native_acquire_,video_import_,video_completion_,host_cpu_;
   double native_acquire_last_{};
   std::uint64_t measured_epoch_{UINT64_MAX}, measured_request_{UINT64_MAX};
-  std::unique_ptr<SubtitleRasterizer> captions_;
+  std::unique_ptr<SubtitleWorker> captions_;
+  static constexpr std::size_t pipeline_cache_limit = 16 * 1024 * 1024;
+  VkPipelineCache pipeline_cache_{};
+  std::string pipeline_cache_file_;
   std::unique_ptr<VulkanRenderer> caption_renderer_;
   bool caption_visible_{};
   int caption_width_{},caption_height_{};
@@ -105,6 +110,10 @@ class Renderer final : public Base {
   std::array<XrCompositionLayerEquirect2KHR, 2> spheres_{};
   std::array<XrCompositionLayerCylinderKHR,2> cylinders_{};
   bool cylinder_enabled_{};
+  bool views_located_{};
+  PFN_xrRequestDisplayRefreshRateFB request_rate_{};
+  float display_rate_{}, saved_rate_{};
+  SourceRegion reachable_, in_view_, converted_;
   std::unique_ptr<AmbilightRenderer> ambilight_;
   std::unique_ptr<VideoRenderer> ambilight_capture_;
   XrSwapchain ambilight_swapchain_{};
@@ -182,7 +191,8 @@ public:
     upload_thumbnails_ = true;
     format_ = format;
     assets_ = assets;
-    if(auto app=application_())app->set_logo(assets("branding/player-logo.rgba"));
+    if(auto app=application_()){app->set_logo(assets("branding/player-logo.rgba"));pipeline_cache_file_=app->state_file()+".pipelines";}
+    open_pipeline_cache();
     if (!sampler_) {
       VkSamplerCreateInfo s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
       s.magFilter = s.minFilter = VK_FILTER_LINEAR;
@@ -219,6 +229,7 @@ public:
     destroyVideo();
     destroy_captions();
     retained_ = {};
+    close_pipeline_cache();
     if (sampler_)
       vkDestroySampler(gpu_->device, sampler_, nullptr);
     sampler_ = VK_NULL_HANDLE;
@@ -295,7 +306,7 @@ public:
 #if CYVR_ENABLE_IMMERSIVE
       video_resources=video_resources || bool(swapchain_) || bool(enhanced_[0].renderer);
 #endif
-      if(video_resources) {vkDeviceWaitIdle(gpu_->device);destroyVideo();}
+      if(video_resources) {vkDeviceWaitIdle(gpu_->device);if(uiRenderer_)uiRenderer_->setVideoTexture();destroyVideo();}
       app->preview_ready = false;
       initialized_ = false;
       retained_ = {};
@@ -306,8 +317,10 @@ public:
     if(splat_renderer_ || failed_splat_ || rendered_splat_)destroy_splats();
     auto image = app->session().take_frame();
     const bool new_frame = bool(image);
-    if (image)
+    if (image) {
+      settle_video();
       retained_ = std::move(image);
+    }
     if (!retained_)
       return false;
     if (last_zoom_ != app->image.zoom || last_cinema_.width!=app->cinema.width || last_cinema_.distance!=app->cinema.distance || last_cinema_.curvature!=app->cinema.curvature) {
@@ -324,19 +337,34 @@ public:
     }
     const bool enhance =
         app->image.reconstruct_view() && failed_request_ != app->processing_request;
-    if (immersive_ && enhance)
-      return false; // Reproject/filter at predicted eye poses, below.
+    bool screen_filter = false;
 #if CYVR_ENABLE_IMMERSIVE
+    screen_filter = immersive_ && enhance && screen_layer(*app);
     if(immersive_ && app->projection==0 && app->cinema.curvature>0 && !cylinder_enabled_)return false;
 #endif
+    if (immersive_ && enhance && !screen_filter)
+      return false; // Reproject/filter at predicted eye poses, below.
     auto controls = app->image;
     controls.quality = enhance ? controls.quality : 0;
     if (!enhance && failed_request_ == app->processing_request) {
       controls.sampling=0;controls.denoise=controls.detail=0;
     }
     auto extent = VideoExtent{uint32_t(state.width), uint32_t(state.height)};
+    if (!immersive_ && !enhance)
+      extent = window_extent(extent, ui.viewportSize.x, ui.viewportSize.y);
     ViewProcessingPlan plan{extent, extent};
-    if (enhance) {
+#if CYVR_ENABLE_IMMERSIVE
+    if (screen_filter) {
+      plan = screen_plan(*app, state, controls);
+      if (zoom_settling() && video_ && resource_quality_ == controls.quality &&
+          panel_input_.width) {
+        plan.output = {width_, height_};
+        plan.input = panel_input_;
+      }
+      extent = plan.output;
+    }
+#endif
+    if (enhance && !screen_filter) {
       const double aspect = eye_aspect(
           state.width, state.height, StereoLayout(app->stereo),
           app->half_stereo && app->stereo ? (app->stereo == 1 ? 2. : .5)
@@ -364,7 +392,20 @@ public:
         plan.input = panel_input_;
       extent = plan.output;
     }
-    if (!new_frame && initialized_ && rendered_image_ == app->image &&
+    // A panorama converts what the head can reach before the next video frame.
+    // Without a new frame, such as in pause, turning past it needs a redraw.
+    SourceRegion visible;
+#if CYVR_ENABLE_IMMERSIVE
+    const bool partial = immersive_ && app->projection && !enhance &&
+                         views_located_ &&
+                         rendered_projection_ == app->projection;
+    if (partial)
+      visible = reachable_;
+    const bool turned = partial && !converted_.contains(in_view_);
+#else
+    const bool turned = false;
+#endif
+    if (!new_frame && !turned && initialized_ && rendered_image_ == app->image &&
         rendered_stereo_ == app->stereo &&
         rendered_projection_ == app->projection &&
         rendered_swap_ == app->swap_eyes && width_ == extent.width &&
@@ -395,10 +436,10 @@ public:
         xrCheck(xrWaitSwapchainImage(swapchain_, &wait), "wait native video");
         native_acquire_last_=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-acquire_start).count();native_acquire_.add(native_acquire_last_);
         try {
-          video_->draw_retained(images_.at(index),
-                                {uint32_t(state.width), uint32_t(state.height)},
+          video_->draw_retained(images_.at(index), plan.input,
                                 {width_, height_}, retained_, controls,
-                                app->stereo, false);
+                                app->stereo, false, visible);
+          converted_ = visible;
         } catch (...) {
           XrSwapchainImageReleaseInfo release{
               XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -447,14 +488,18 @@ public:
                             immersive_ ? "immersive" : "panel");
       initialized_ = true;
       ++frames_;
+      if (frames_ == 24)
+        store_pipeline_cache();
       record_video(*app, before, video_->gpu_ms());
       video_import_.add(video_->timings().import_ms);video_completion_.add(video_->timings().completion_ms);
       if (frames_ == 1 || frames_ % 24 == 0)
         __android_log_print(
             ANDROID_LOG_INFO, "CyVRPlayer",
-            "VIDEO_GPU_WORK operations=%llu host=%s width=%u height=%u",
+            "VIDEO_GPU_WORK operations=%llu host=%s width=%u height=%u "
+            "region=%.2f,%.2f,%.2f,%.2f",
             static_cast<unsigned long long>(frames_),
-            immersive_ ? "immersive" : "panel", width_, height_);
+            immersive_ ? "immersive" : "panel", width_, height_, visible.left,
+            visible.top, visible.right, visible.bottom);
       return !immersive_;
     } catch (const std::exception &e) {
       ++app->render_monitor.errors;
@@ -475,9 +520,20 @@ public:
   std::vector<const char *> instanceExtensions() const override {
     return {XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME};
   }
-  std::vector<const char*> optionalInstanceExtensions()const override{return {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME};}
+  std::vector<const char*> optionalInstanceExtensions()const override{return {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME,XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME};}
   void xrReady(const AndroidXrContext &context) override {
     xr_ = context;
+    // Video work waits for the GPU on the frame loop. The default governor lowers
+    // the clock as soon as a frame gets cheaper, which turns the gain into late frames.
+    if(std::find(context.enabledApplicationExtensions.begin(),context.enabledApplicationExtensions.end(),std::string_view(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))!=context.enabledApplicationExtensions.end()){
+      PFN_xrPerfSettingsSetPerformanceLevelEXT set_level{};
+      if(XR_SUCCEEDED(xrGetInstanceProcAddr(xr_.instance,"xrPerfSettingsSetPerformanceLevelEXT",reinterpret_cast<PFN_xrVoidFunction*>(&set_level))) && set_level){
+        const auto result=set_level(xr_.session,XR_PERF_SETTINGS_DOMAIN_GPU_EXT,XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
+        __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","GPU_LEVEL sustained_high=%d",int(XR_SUCCEEDED(result)));
+      }
+    }
+    request_rate_=nullptr;display_rate_=saved_rate_=0;
+    if(XR_FAILED(xrGetInstanceProcAddr(xr_.instance,"xrRequestDisplayRefreshRateFB",reinterpret_cast<PFN_xrVoidFunction*>(&request_rate_))))request_rate_=nullptr;
     XrReferenceSpaceCreateInfo room{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};room.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_STAGE;room.poseInReferenceSpace.orientation.w=1;
     if(XR_FAILED(xrCreateReferenceSpace(xr_.session,&room,&stable_space_)))stable_space_=XR_NULL_HANDLE;
     __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","VIDEO_ROOM_SPACE available=%d",int(stable_space_!=XR_NULL_HANDLE));
@@ -520,7 +576,7 @@ public:
                               const XrCompositionLayerBaseHeader **output,
                               uint32_t capacity) override {
     auto app=application_();
-    if(app && app->session().state().volumetric){try{return gaussian_layers(frame,output,capacity,*app);}catch(const std::exception& e){++app->render_monitor.errors;failed_splat_=app->session().splats().cloud;failed_splat_settings_=app->image;app->session().pause(true);app->show_interface();last_ui().setToast(e.what());return 0;}}
+    if(app && app->session().video_state().volumetric){try{return gaussian_layers(frame,output,capacity,*app);}catch(const std::exception& e){++app->render_monitor.errors;failed_splat_=app->session().splats().cloud;failed_splat_settings_=app->image;app->session().pause(true);app->show_interface();last_ui().setToast(e.what());return 0;}}
     auto count=video_layers(frame,output,capacity);
     if(app && count && count<capacity){
       try {
@@ -534,7 +590,6 @@ public:
       }
     }else if(!app || !app->ambilight.enabled){ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;}
     if(app && caption_visible_ && caption_swapchain_ && count<capacity && video_placement_.placed()){
-      const auto media=app->session().state();
       auto pose=video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema,app->scene);
       if(app->projection)pose=video_placement_.screen(ImageSettings{},CinemaSettings{},app->scene.rotation_only());
       pose.position=pose.position+rotate(pose.orientation,{0,0,.01f});
@@ -558,23 +613,38 @@ public:
     }
     return count;
   }
+  // The foundation only requests the saved rate when it changes, so this request
+  // stands and the saved preference is left alone.
+  void match_display_rate(const PlayerApplication &app,double frame_rate){
+    if(!request_rate_)return;
+    const auto &ui=last_ui();
+    const auto &rates=ui.refreshRates;
+    const bool doubled=wants_double_rate(app.smooth_video,frame_rate,app.image) && std::find(rates.begin(),rates.end(),120.f)!=rates.end();
+    const float wanted=doubled?120.f:ui.settings.requestedHz;
+    if(wanted==display_rate_ && ui.settings.requestedHz==saved_rate_)return;
+    display_rate_=wanted;saved_rate_=ui.settings.requestedHz;
+    if(std::find(rates.begin(),rates.end(),wanted)==rates.end())return;
+    const auto result=request_rate_(xr_.session,wanted);
+    __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","DISPLAY_RATE requested=%.0f doubled=%d ok=%d",wanted,int(doubled),int(XR_SUCCEEDED(result)));
+  }
   uint32_t video_layers(const AndroidXrFrame &frame,
                              const XrCompositionLayerBaseHeader **output,
                              uint32_t capacity) {
     auto app = application_();
     if (!app)
       return 0;
-    const auto media = app->session().state();
+    const auto media = app->session().video_state();
+    match_display_rate(*app,media.ready?media.nominal_fps:0);
     if (!media.ready || !place_video(frame, *app))
       return 0;
-    const bool projected=retained_ && (app->image.reconstruct_view() || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) && failed_request_!=app->processing_request;
+    const bool projected=retained_&& failed_request_!=app->processing_request && (app->projection?app->image.reconstruct_view():!screen_layer(*app));
+    if(app->projection && !projected)locate_panorama(frame,*app);else views_located_=false;
     const int path=app->projection?4:projected?(app->cinema.curvature>0?3:2):(app->cinema.curvature>0?1:0);
     if((reported_surface_!=path || reported_cinema_!=app->cinema) && !last_ui().interacting()){
       reported_surface_=path;reported_cinema_=app->cinema;
       __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","CINEMA_SURFACE path=%d width=%.3f distance=%.3f curve=%.3f height=%.3f tilt=%.3f roll=%.3f environment=%d ambient=%.3f",path,app->cinema.width,app->cinema.distance,app->cinema.curvature,app->cinema.elevation,app->cinema.pitch,app->cinema.roll,app->cinema.environment,app->cinema.ambient);
     }
-    if (retained_ && (app->image.reconstruct_view() || (!app->projection && app->cinema.curvature>0 && !cylinder_enabled_)) &&
-        failed_request_ != app->processing_request) {
+    if (projected) {
       try {
         return projected_video(frame, output, capacity, *app);
       } catch (const std::exception &e) {
@@ -616,8 +686,8 @@ public:
                              : media.pixel_aspect;
       q.size = {app->cinema.width * app->image.zoom,
                 app->cinema.width * app->image.zoom /
-                    float(eye_aspect(width_, height_, StereoLayout(app->stereo),
-                                     par))};
+                    float(eye_aspect(media.width, media.height,
+                                     StereoLayout(app->stereo), par))};
       if (app->projection) {
         auto &s = spheres_[eye];
         s = {XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR};
@@ -663,7 +733,7 @@ private:
     if(ambilight_ && ambilight_capture_ && ambilight_swapchain_ && !ambilight_images_.empty())return;
     destroy_ambilight();
     ambilight_=std::make_unique<AmbilightRenderer>(*gpu_,format_,assets_);
-    ambilight_capture_=std::make_unique<VideoRenderer>(*gpu_,format_,assets_);
+    ambilight_capture_=std::make_unique<VideoRenderer>(*gpu_,format_,assets_,pipeline_cache_);
     XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
     info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
     info.format=format_;info.sampleCount=1;info.width=info.height=128;info.faceCount=info.arraySize=info.mipCount=1;
@@ -674,14 +744,17 @@ private:
     for(const auto& image:images)ambilight_images_.push_back(image.image);
   }
   const XrCompositionLayerBaseHeader* ambilight_layer(PlayerApplication& app){
-    const auto media=app.session().state();
+    const auto media=app.session().video_state();
     if(!app.ambilight.enabled || app.projection || media.volumetric || !retained_ || !video_placement_.placed()){
-      ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;return nullptr;
+      ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;
+      // The capture renderer holds references to every decoder buffer it saw.
+      if(!app.ambilight.enabled && ambilight_capture_){vkDeviceWaitIdle(gpu_->device);destroy_ambilight();}
+      return nullptr;
     }
     if(ambilight_failed_epoch_==retained_.epoch)return nullptr;
     create_ambilight();
     const auto now=std::chrono::steady_clock::now();
-    auto image=app.image;image.quality=0;image.zoom=1;image.pan_x=image.pan_y=0;
+    auto image=app.image;image.quality=0;image.zoom=1;image.pan_x=image.pan_y=0;image.sampling=0;image.denoise=image.detail=0;
     const bool first=!ambilight_active_ || ambilight_epoch_!=retained_.epoch;
     const bool capture=first || ambilight_pts_!=retained_.pts_us || ambilight_image_!=image || ambilight_stereo_!=app.stereo;
     const float par=app.half_stereo && app.stereo?(app.stereo==1?2.f:.5f):media.pixel_aspect;
@@ -789,9 +862,10 @@ private:
   void update_captions(PlayerApplication& app,UiModel& ui,const PlayerState& state){
     const auto snapshot=app.session().subtitles();
     if(auto failed=failed_caption_.lock();failed && failed==snapshot.config)return;
+    // ASS can take longer than a VR frame; the last finished image stays up.
     if(!captions_ && !snapshot.config){app.caption_ready=false;caption_visible_=false;return;}
     try{
-      if(!captions_)captions_=std::make_unique<SubtitleRasterizer>(assets_("subtitle-font.ttf"));
+      if(!captions_)captions_=std::make_unique<SubtitleWorker>(assets_("subtitle-font.ttf"));
       int width=std::max(1920,int(ui.viewportSize.x));
 #if CYVR_ENABLE_IMMERSIVE
       if(immersive_)width=int(eye_extents_[0].width);
@@ -799,11 +873,16 @@ private:
       width=std::clamp(width,1024,4096);
       const double par=app.half_stereo && app.stereo?(app.stereo==1?2.:.5):state.pixel_aspect;
       const double aspect=app.projection?16./9:eye_aspect(state.width,state.height,StereoLayout(app.stereo),par);
-      const int height=std::clamp(int(std::lround(width/std::max(.25,aspect))),256,4096);
-      auto image=captions_->render(snapshot,width,height);
+      int height=std::clamp(int(std::lround(width/std::max(.25,aspect))),256,4096);
+      captions_->post(snapshot,width,height);
+      auto image=captions_->take();
       if(!image)return;
+      width=image->canvas_width;height=image->canvas_height;
+      const bool was_visible=caption_visible_;
       caption_visible_=!image->rgba.empty();app.caption_ready=caption_visible_;
-      ui.invalidate();
+      // The VR caption layer is separate from the panel, which only needs a
+      // redraw when the caption appears or disappears.
+      if(!immersive_ || was_visible!=caption_visible_)ui.invalidate();
       if(!caption_visible_)return;
       if(!caption_renderer_){caption_renderer_=std::make_unique<VulkanRenderer>(*gpu_);caption_renderer_->initialize(format_,assets_);}
       caption_renderer_->uploadImages(image->width,image->height,image->rgba);
@@ -830,13 +909,44 @@ private:
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};xrCheck(xrReleaseSwapchainImage(caption_swapchain_,&release),"release subtitle image");
       }
 #endif
-      __android_log_print(ANDROID_LOG_INFO,"CyVRPlayer","SUBTITLE_VISIBLE canvas=%dx%d image=%dx%d",width,height,image->width,image->height);
     }catch(const std::exception& e){failed_caption_=snapshot.config;app.caption_ready=false;caption_visible_=false;ui.setToast(e.what());__android_log_print(ANDROID_LOG_ERROR,"CyVRPlayer","SUBTITLE_RENDER_ERROR %s",e.what());}
   }
   bool zoom_settling() const {
     return std::chrono::steady_clock::now() - zoom_changed_ <
            std::chrono::milliseconds(250);
   }
+#if CYVR_ENABLE_IMMERSIVE
+  // A cinema screen is world-locked, so the compositor can reproject it. Filters
+  // then run once per decoded frame instead of for each eye of each display frame.
+  bool screen_layer(PlayerApplication &app) const {
+    return !app.projection && (app.cinema.curvature <= 0 || cylinder_enabled_);
+  }
+  ViewProcessingPlan screen_plan(PlayerApplication &app, const PlayerState &state,
+                                 const ImageSettings &controls) const {
+    // Quest's horizontal field of view: this picks a texture density, not geometry.
+    constexpr float view_angle = 1.7f;
+    // Keeps filtered detail through the compositor's bilinear resampling.
+    constexpr float resample_margin = 1.25f;
+    const double par = app.half_stereo && app.stereo
+                           ? (app.stereo == 1 ? 2. : .5)
+                           : state.pixel_aspect;
+    const float distance = std::max(.1f, app.cinema.distance);
+    const float radius = app.cinema.radius(app.image.zoom);
+    const float half_angle = app.cinema.angle() * .5f;
+    ScreenView view;
+    view.source = {uint32_t(state.width), uint32_t(state.height)};
+    view.aspect = float(eye_aspect(state.width, state.height,
+                                   StereoLayout(app.stereo), par));
+    view.stereo = app.stereo;
+    view.pixels_per_radian = eye_extents_[0].width / view_angle * resample_margin;
+    view.angular_width =
+        radius > 0 ? 2 * std::atan2(radius * std::sin(half_angle),
+                                    distance - radius * (1 - std::cos(half_angle)))
+                   : 2 * std::atan(app.cinema.width * app.image.zoom / (2 * distance));
+    view.frame_rate = float(state.nominal_fps);
+    return screen_processing_plan(view, controls);
+  }
+#endif
   void record_video(PlayerApplication &app,
                     std::chrono::steady_clock::time_point before,
                     std::optional<double> gpu) {
@@ -917,6 +1027,42 @@ private:
     }
     return video_placement_.placed();
   }
+  void locate_panorama(const AndroidXrFrame &frame, PlayerApplication &app) {
+    // Reaches 17 degrees past the view, or about 500 degrees per second of
+    // head turn over the two frames until the conversion is on screen.
+    constexpr float reach = .3f, slack = .08f;
+    std::array<XrView, 2> views{{ {XR_TYPE_VIEW}, { XR_TYPE_VIEW } }};
+    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
+    locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    locate.displayTime = frame.displayTime;
+    locate.space = video_space_;
+    XrViewState state{XR_TYPE_VIEW_STATE};
+    uint32_t count{};
+    views_located_ =
+        XR_SUCCEEDED(xrLocateViews(xr_.session, &locate, &state, 2, &count, views.data())) &&
+        count == 2;
+    if (views_located_ && !(state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
+      // The same head-relative fallback as projected_video.
+      views_located_ = video_space_ == xr_.view;
+      for (auto &view : views)
+        view.pose = {{0, 0, 0, 1}, {0, 0, 0}};
+    }
+    if (!views_located_)
+      return;
+    const auto pose = video_placement_.screen(app.image, CinemaSettings{}, app.scene);
+    const auto inverse = inverse_rotation(pose.orientation);
+    for (int i = 0; i < 2; ++i) {
+      const auto &view = views[i];
+      const float fov[4]{std::tan(view.fov.angleLeft), std::tan(view.fov.angleRight),
+                         std::tan(view.fov.angleUp), std::tan(view.fov.angleDown)};
+      const auto &q = view.pose.orientation;
+      const auto orientation = multiply_rotation(inverse, {q.x, q.y, q.z, q.w});
+      const auto wide = visible_panorama(fov, orientation, app.projection, reach),
+                 seen = visible_panorama(fov, orientation, app.projection, slack);
+      reachable_ = i ? reachable_.joined(wide) : wide;
+      in_view_ = i ? in_view_.joined(seen) : seen;
+    }
+  }
   void destroy_enhanced() {
     for (auto &eye : enhanced_) {
       eye.renderer.reset();
@@ -970,7 +1116,8 @@ private:
           "display-view images");
       for (const auto &image : images)
         eye.images.push_back(image.image);
-      eye.renderer = std::make_unique<VideoRenderer>(*gpu_, format_, assets_);
+      eye.renderer = std::make_unique<VideoRenderer>(*gpu_, format_, assets_, pipeline_cache_);
+      eye.renderer->defer_completion();
     }
   }
   uint32_t projected_video(const AndroidXrFrame &frame,
@@ -1007,7 +1154,7 @@ private:
           view.fov.angleRight <= view.fov.angleLeft ||
           view.fov.angleUp <= view.fov.angleDown)
         return 0;
-    const auto media = app.session().state();
+    const auto media = app.session().video_state();
     const auto videoPose = video_placement_.screen(app.image,app.projection?CinemaSettings{}:app.cinema,app.scene);
     const auto videoPosition = videoPose.position;
     const auto inverse = inverse_rotation(videoPose.orientation);
@@ -1054,12 +1201,24 @@ private:
       const VideoExtent available{
           uint32_t(std::max(1.f, std::ceil(sourceW * hfov / angularW))),
           uint32_t(std::max(1.f, std::ceil(sourceH * vfov / angularH)))};
-      plans[i] = view_processing_plan(eye_extents_[i], available, app.image);
+      // The runtime recommends 80% of the panel's width, where a filtered view
+      // looks softer than the video the compositor samples at full density.
+      auto target = app.image;
+      target.upscale = std::max(target.upscale, 1);
+      plans[i] = view_processing_plan(eye_extents_[i], available, target);
       const auto &previous = enhanced_[i];
-      if (zoom_settling() && previous.renderer &&
-          previous.quality == app.image.quality &&
+      // The detail estimate follows the head by a few texels every frame.
+      // Rebuilding swapchains and filters for that would stall the XR loop, so
+      // only a real change in visible detail replaces the reconstruction size.
+      const auto near_input = [](uint32_t next, uint32_t current) {
+        return std::abs(int64_t(next) - int64_t(current)) * 10 <= int64_t(current);
+      };
+      if (previous.renderer && previous.quality == app.image.quality &&
           previous.output.width == plans[i].output.width &&
-          previous.output.height == plans[i].output.height)
+          previous.output.height == plans[i].output.height &&
+          (zoom_settling() ||
+           (near_input(plans[i].input.width, previous.input.width) &&
+            near_input(plans[i].input.height, previous.input.height))))
         plans[i].input = previous.input;
     }
     const bool configChanged =
@@ -1146,6 +1305,62 @@ private:
 #endif
   int reportedHidden_{-1};
   int reportedCompact_{-1};
+  // Renderers are rebuilt for every video, and each once recompiled its shaders.
+  // The driver validates this file's header and ignores stale or foreign data.
+  void open_pipeline_cache() {
+    if (pipeline_cache_)
+      return;
+    std::vector<char> saved;
+    if (!pipeline_cache_file_.empty()) {
+      std::ifstream file(std::filesystem::u8path(pipeline_cache_file_), std::ios::binary | std::ios::ate);
+      if (file && file.tellg() > 0 && file.tellg() < std::streamoff(pipeline_cache_limit)) {
+        saved.resize(std::size_t(file.tellg()));
+        file.seekg(0);
+        file.read(saved.data(), std::streamsize(saved.size()));
+        if (!file)
+          saved.clear();
+      }
+    }
+    const auto create = reinterpret_cast<PFN_vkCreatePipelineCache>(
+        vkGetInstanceProcAddr(gpu_->instance, "vkCreatePipelineCache"));
+    if (!create)
+      return;
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    info.initialDataSize = saved.size();
+    info.pInitialData = saved.empty() ? nullptr : saved.data();
+    if (create(gpu_->device, &info, nullptr, &pipeline_cache_) != VK_SUCCESS)
+      pipeline_cache_ = VK_NULL_HANDLE;
+  }
+  void store_pipeline_cache() {
+    const auto read = reinterpret_cast<PFN_vkGetPipelineCacheData>(
+        vkGetInstanceProcAddr(gpu_->instance, "vkGetPipelineCacheData"));
+    std::size_t size{};
+    if (!read || !pipeline_cache_ || pipeline_cache_file_.empty() ||
+        read(gpu_->device, pipeline_cache_, &size, nullptr) != VK_SUCCESS ||
+        !size || size >= pipeline_cache_limit)
+      return;
+    std::vector<char> data(size);
+    if (read(gpu_->device, pipeline_cache_, &size, data.data()) != VK_SUCCESS)
+      return;
+    const auto temporary = std::filesystem::u8path(pipeline_cache_file_ + ".tmp");
+    {
+      std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+      file.write(data.data(), std::streamsize(size));
+      if (!file)
+        return;
+    }
+    std::error_code ignored;
+    std::filesystem::rename(temporary, std::filesystem::u8path(pipeline_cache_file_), ignored);
+  }
+  void close_pipeline_cache() {
+    if (!pipeline_cache_)
+      return;
+    store_pipeline_cache();
+    if (const auto destroy = reinterpret_cast<PFN_vkDestroyPipelineCache>(
+            vkGetInstanceProcAddr(gpu_->instance, "vkDestroyPipelineCache")))
+      destroy(gpu_->device, pipeline_cache_, nullptr);
+    pipeline_cache_ = VK_NULL_HANDLE;
+  }
   void destroyVideo() {
 #if CYVR_ENABLE_IMMERSIVE
     destroy_enhanced();
@@ -1169,6 +1384,12 @@ private:
     initialized_ = false;
     width_ = height_ = 0;
   }
+  void settle_video() {
+    if(video_)video_->settle();
+#if CYVR_ENABLE_IMMERSIVE
+    for(auto &eye:enhanced_)if(eye.renderer)eye.renderer->settle();
+#endif
+  }
   void createVideo(uint32_t width, uint32_t height) {
     if (uiRenderer_)
       uiRenderer_->setVideoTexture();
@@ -1182,7 +1403,10 @@ private:
         height > properties.limits.maxImageDimension2D)
       throw std::runtime_error(
           "Native video dimensions exceed this GPU's image limits");
-    if(auto app=application_();!app || !app->session().state().volumetric)video_ = std::make_unique<VideoRenderer>(*gpu_, format_, assets_);
+    if(auto app=application_();!app || !app->session().state().volumetric){
+      video_ = std::make_unique<VideoRenderer>(*gpu_, format_, assets_, pipeline_cache_);
+      if(immersive_)video_->defer_completion();
+    }
 #if CYVR_ENABLE_IMMERSIVE
     if (immersive_) {
       XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};

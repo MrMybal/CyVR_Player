@@ -23,29 +23,6 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-5; }
 template <class F> void rejects(F fn) {
   bool rejected = false;
   try {
-    {
-      PlaybackControls controls;
-      using Mode=PlaybackControls::Mode;
-      controls.update(false,0,false);
-      require(controls.mode()==Mode::full,"2D and non-playing library must keep full controls");
-      controls.update(true,10,false);
-      require(controls.mode()==Mode::compact,"Immersive playback must start compact");
-      controls.update(true,12.999,false);
-      require(controls.mode()==Mode::compact,"Controls must remain until three seconds");
-      controls.update(true,13,false);
-      require(controls.mode()==Mode::hidden,"Three seconds of inactivity must hide controls");
-      controls.activity(15);
-      require(controls.mode()==Mode::compact,"Waking must restore the compact controls");
-      controls.expand(16);
-      require(controls.mode()==Mode::full,"Full interface action must expand controls");
-      controls.update(true,20,true);
-      controls.update(true,22.9,false);
-      require(controls.mode()==Mode::full,"A held slider must defer automatic hiding");
-      controls.update(true,23,false);
-      require(controls.mode()==Mode::hidden,"Full controls must also auto-hide when interaction ends");
-      controls.update(false,30,false);
-      require(controls.mode()==Mode::full,"Errors and stopping playback must restore the library");
-    }
     fn();
   } catch (const std::invalid_argument &) {
     rejected = true;
@@ -56,6 +33,77 @@ float as_float(std::uint32_t bits) {
   float value = 0;
   std::memcpy(&value, &bits, sizeof value);
   return value;
+}
+void playback_controls_tests() {
+  {
+    PlaybackControls controls;
+    using Mode=PlaybackControls::Mode;
+    controls.update(false,0,false);
+    require(controls.mode()==Mode::full,"2D and non-playing library must keep full controls");
+    controls.update(true,10,false);
+    require(controls.mode()==Mode::compact,"Immersive playback must start compact");
+    controls.update(true,12.999,false);
+    require(controls.mode()==Mode::compact,"Controls must remain until three seconds");
+    controls.update(true,13,false);
+    require(controls.mode()==Mode::hidden,"Three seconds of inactivity must hide controls");
+    controls.activity(15);
+    require(controls.mode()==Mode::compact,"Waking must restore the compact controls");
+    controls.expand(16);
+    require(controls.mode()==Mode::full,"Full interface action must expand controls");
+    controls.update(true,20,true);
+    controls.update(true,22.9,false);
+    require(controls.mode()==Mode::full,"A held slider must defer automatic hiding");
+    controls.update(true,23,false);
+    require(controls.mode()==Mode::hidden,"Full controls must also auto-hide when interaction ends");
+    controls.update(false,30,false);
+    require(controls.mode()==Mode::full,"Errors and stopping playback must restore the library");
+  }
+}
+void screen_plan_tests() {
+  ImageSettings fsr;
+  fsr.quality = 2;
+  ScreenView view;
+  view.pixels_per_radian = 1518;
+  view.angular_width = 1.04f;
+  view.frame_rate = 24;
+  view.aspect = 16.f / 9;
+  view.source = {1920, 1080};
+  auto plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == 1920 && plan.output.height == 1080 && plan.input.width == 1920,
+          "A source above display density must keep its pixels");
+  view.source = {1280, 720};
+  plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == 1584 && plan.input.width == 1280 && plan.input.height == 720,
+          "A source below display density must be reconstructed");
+  view.source = {1920, 960};
+  view.aspect = 2;
+  view.stereo = 1;
+  plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == 3168 && plan.output.height == 960,
+          "Half side-by-side must scale each axis independently");
+  require(plan.output.width % 2 == 0 && plan.input.width % 2 == 0 && plan.input.width <= plan.output.width,
+          "Stereo filters need even extents and EASU cannot downscale");
+  view.source = {3841, 2160};
+  view.aspect = 16.f / 9;
+  view.stereo = 0;
+  view.frame_rate = 60;
+  plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == 1976 && plan.input.width <= plan.output.width,
+          "High frame rates must not filter every source pixel");
+  view.frame_rate = 24;
+  plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == 3160 && plan.output.height == 1784 && plan.input.width % 2 == 0,
+          "Standard frame rates keep detail up to twice the display density");
+  const auto before = plan;
+  view.angular_width += .0001f;
+  plan = screen_processing_plan(view, fsr);
+  require(plan.output.width == before.output.width && plan.output.height == before.output.height,
+          "Tiny geometry changes must not rebuild filter resources");
+  ImageSettings cas;
+  cas.quality = 1;
+  plan = screen_processing_plan(view, cas);
+  require(plan.input.width == plan.output.width && plan.input.height == plan.output.height,
+          "CAS works at its output size");
 }
 void projection_tests() {
   const auto front = equirect_uv({0, 0, -1}, Projection::equirect360);
@@ -268,6 +316,8 @@ void performance_tests() {
 } // namespace
 int main() {
   try {
+    playback_controls_tests();
+    screen_plan_tests();
     projection_tests();
     queue_tests();
     effect_tests();

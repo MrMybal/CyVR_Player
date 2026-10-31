@@ -68,6 +68,8 @@ AndroidBridge::AndroidBridge(android_app *app)
     cancel_ = e.env->GetMethodID(type_, "cancelQuery", "()V");
     locations_=e.env->GetMethodID(type_,"folderLocations","()[Ljava/lang/String;");
     thumbnail_=e.env->GetMethodID(type_,"videoThumbnail","(Ljava/lang/String;)[B");
+    browser_=e.env->GetMethodID(type_,"openBrowser","(Ljava/lang/String;)V");
+    web_request_=e.env->GetMethodID(type_,"webRequest","(Ljava/lang/String;)[Ljava/lang/String;");
     e.check();
 }
 AndroidBridge::~AndroidBridge() {
@@ -87,6 +89,15 @@ Platform AndroidBridge::platform() {
     p.thumbnail=[this](const std::string& uri){
       Env e(vm_);auto text=e.env->NewStringUTF(uri.c_str());auto bytes=static_cast<jbyteArray>(e.env->CallObjectMethod(activity_,thumbnail_,text));e.env->DeleteLocalRef(text);e.check();
       std::vector<std::uint8_t> result;if(bytes){const auto size=e.env->GetArrayLength(bytes);if(size==160*90*4){result.resize(size);e.env->GetByteArrayRegion(bytes,0,size,reinterpret_cast<jbyte*>(result.data()));}e.env->DeleteLocalRef(bytes);}return result;
+    };
+    p.open_browser=[this](const std::string& language){
+      Env e(vm_);auto text=e.env->NewStringUTF(language.c_str());e.env->CallVoidMethod(activity_,browser_,text);e.env->DeleteLocalRef(text);e.check();
+    };
+    p.web_request=[this](const std::string& url){
+      Env e(vm_);auto text=e.env->NewStringUTF(url.c_str());auto array=static_cast<jobjectArray>(e.env->CallObjectMethod(activity_,web_request_,text));e.env->DeleteLocalRef(text);e.check();
+      auto values=strings(e.env,array);WebRequest request;
+      if(values.size()==3){request.headers=std::move(values[0]);request.user_agent=std::move(values[1]);request.cookies=std::move(values[2]);}
+      return request;
     };
     // Certificate extraction is initialized before the XR loop, never in a frame.
     Env e(vm_);

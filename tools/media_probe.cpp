@@ -85,6 +85,8 @@ int main(int argc,char** argv){
             else if(arg=="--timeout-ms"){options.open_timeout_ms=options.read_timeout_ms=std::stoi(value());}
             else if(arg=="--cancel-after-ms") cancel_ms=std::stoi(value());
             else if(arg=="--ca-file") options.ca_file=value();
+            else if(arg=="--http-header") options.http_headers+=value()+"\r\n";
+            else if(arg=="--http-cookie") options.http_cookies+=value()+"\n";
             else if(arg=="--list") listing=value();
             else if(arg.rfind("--",0)==0) throw std::invalid_argument("Unknown argument");
             else if(input.empty()) input=arg;

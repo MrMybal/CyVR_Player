@@ -6,14 +6,7 @@ namespace cyvr::player {
 namespace {
 std::string clipped(cyvr::DrawList &d, std::string_view value, float width,
                     float size = 22) {
-  std::string text(value);
-  while (!text.empty() && d.textWidth(size, text) > width) {
-    auto n = text.size() - 1;
-    while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xc0) == 0x80)
-      --n;
-    text.resize(n);
-  }
-  return text;
+  return fit_text(d, value, width, size);
 }
 } // namespace
 void PlayerApplication::icon_button(cyvr::DrawList &d, int id, cyvr::Rect r,

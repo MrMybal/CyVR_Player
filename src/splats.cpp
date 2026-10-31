@@ -70,6 +70,7 @@ std::shared_ptr<const splat::SplatCloud> decode_splats(const std::vector<std::ui
     int rests=0;while(indices.count("f_rest_"+std::to_string(rests)))++rests;
     if(rests!=0 && rests!=9 && rests!=24 && rests!=45)throw MediaError("Incomplete Gaussian spherical harmonics");
     cloud->shDegree=rests==45?3:rests==24?2:rests==9?1:0;cloud->sh.reserve(count*rests);
+    std::vector<int> harmonics(std::size_t(rests),0);for(int n=0;n<rests;++n)harmonics[std::size_t(n)]=field("f_rest_"+std::to_string(n));
     std::size_t cursor=begin+1;if(format!="ascii" && (stride>bytes.size() || count>(bytes.size()-cursor)/stride))throw MediaError("Truncated Gaussian PLY");
     std::istringstream ascii(format=="ascii"?std::string(reinterpret_cast<const char*>(bytes.data()+cursor),bytes.size()-cursor):std::string{});ascii.imbue(std::locale::classic());
     std::vector<double> values(properties.size());
@@ -78,7 +79,7 @@ std::shared_ptr<const splat::SplatCloud> decode_splats(const std::vector<std::ui
       for(std::size_t p=0;p<properties.size();++p){if(format=="ascii"){if(!(ascii>>values[p]))throw MediaError("Truncated ASCII Gaussian PLY");}else{values[p]=scalar(bytes.data()+cursor,properties[p]);cursor+=properties[p].size;}}
       float p[3],s[3],q[4],rgb[3];for(int c=0;c<3;++c){p[c]=float(values[xyz[c]]);const auto log=values[scales[c]];if(!std::isfinite(log) || log<-30 || log>13)throw MediaError("Gaussian scale exceeds the supported range");s[c]=float(std::exp(log));rgb[c]=float(.5+.28209479177387814*values[colors[c]]);}for(int c=0;c<4;++c)q[c]=float(values[rot[c]]);
       const auto opacity=values[alpha];if(!std::isfinite(opacity))throw MediaError("Invalid Gaussian opacity");append(*cloud,p,s,q,rgb,float(1/(1+std::exp(-std::clamp(opacity,-80.,80.)))));
-      for(int coefficient=0;coefficient<rests/3;++coefficient)for(int c=0;c<3;++c){const auto value=values[indices.at("f_rest_"+std::to_string(c*(rests/3)+coefficient))];if(!std::isfinite(value)||std::abs(value)>65504)throw MediaError("Invalid Gaussian harmonics");cloud->sh.push_back(float(value));}
+      for(int coefficient=0;coefficient<rests/3;++coefficient)for(int c=0;c<3;++c){const auto value=values[harmonics[std::size_t(c*(rests/3)+coefficient)]];if(!std::isfinite(value)||std::abs(value)>65504)throw MediaError("Invalid Gaussian harmonics");cloud->sh.push_back(float(value));}
     }
   }else{
     if(bytes.size()%32)throw MediaError("Use Gaussian PLY or the standard 32-byte .splat format");reserve(*cloud,bytes.size()/32);

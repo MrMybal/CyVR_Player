@@ -3,7 +3,12 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cmath>
+#include <condition_variable>
+#include <exception>
 #include <filesystem>
+#include <mutex>
+#include <thread>
+#include <utility>
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
@@ -49,6 +54,44 @@ struct SubtitleRasterizer::Impl {
         config=s.config;cues=s.cues;
     }
 };
+struct SubtitleWorker::Impl {
+    struct Request {SubtitleSnapshot snapshot;int width{},height{};};
+    SubtitleRasterizer rasterizer;
+    std::mutex mutex;std::condition_variable wake;
+    std::optional<Request> waiting;
+    std::optional<SubtitleImage> finished;
+    std::exception_ptr failure;
+    bool quit{};
+    std::thread worker;
+    explicit Impl(std::vector<std::uint8_t> font):rasterizer(std::move(font)),worker([this]{run();}){}
+    void run(){
+        std::unique_lock<std::mutex> lock(mutex);
+        for(;;){
+            wake.wait(lock,[&]{return quit || waiting;});
+            if(quit)return;
+            auto request=std::move(*waiting);waiting.reset();
+            lock.unlock();
+            std::optional<SubtitleImage> image;std::exception_ptr error;
+            try{image=rasterizer.render(request.snapshot,request.width,request.height);}catch(...){error=std::current_exception();}
+            lock.lock();
+            if(error)failure=error;else if(image)finished=std::move(image);
+        }
+    }
+};
+SubtitleWorker::SubtitleWorker(std::vector<std::uint8_t> font):impl_(std::make_unique<Impl>(std::move(font))){}
+SubtitleWorker::~SubtitleWorker(){
+    {std::lock_guard<std::mutex> lock(impl_->mutex);impl_->quit=true;}
+    impl_->wake.notify_all();impl_->worker.join();
+}
+void SubtitleWorker::post(SubtitleSnapshot snapshot,int width,int height){
+    {std::lock_guard<std::mutex> lock(impl_->mutex);impl_->waiting=Impl::Request{std::move(snapshot),width,height};}
+    impl_->wake.notify_one();
+}
+std::optional<SubtitleImage> SubtitleWorker::take(){
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if(impl_->failure)std::rethrow_exception(std::exchange(impl_->failure,nullptr));
+    return std::exchange(impl_->finished,std::nullopt);
+}
 SubtitleRasterizer::SubtitleRasterizer(std::vector<std::uint8_t> font):impl_(std::make_unique<Impl>(std::move(font))){}
 SubtitleRasterizer::~SubtitleRasterizer()=default;
 std::optional<SubtitleImage> SubtitleRasterizer::render(const SubtitleSnapshot& s,int width,int height){
@@ -69,8 +112,11 @@ std::optional<SubtitleImage> SubtitleRasterizer::render(const SubtitleSnapshot& 
         const int cw=cue->canvas_width>0?cue->canvas_width:width,ch=cue->canvas_height>0?cue->canvas_height:height;
         const int w=std::max(1,int(std::lround(double(b.width)*width/cw))),h=std::max(1,int(std::lround(double(b.height)*height/ch)));
         if(std::uint64_t(w)*h>16*1024*1024)throw MediaError("Subtitle image exceeds the raster budget");
+        // A stale object under a tiny canvas can claim a huge stretch. Real
+        // subtitles only scale between video resolutions.
+        if(std::int64_t(w)>std::int64_t(b.width)*16 || std::int64_t(h)>std::int64_t(b.height)*16)continue;
         SubtitleBitmap out{int(std::lround(double(b.x)*width/cw)),int(std::lround(double(b.y)*height/ch)),w,h,{}};out.rgba.resize(std::size_t(w)*h*4);
-        for(int y=0;y<h;++y)for(int x=0;x<w;++x){const auto* src=b.rgba.data()+(std::size_t(std::min(b.height-1,y*b.height/h))*b.width+std::min(b.width-1,x*b.width/w))*4;std::copy(src,src+4,out.rgba.data()+(std::size_t(y)*w+x)*4);}
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x){const auto* src=b.rgba.data()+(std::size_t(std::min<std::int64_t>(b.height-1,std::int64_t(y)*b.height/h))*b.width+std::size_t(std::min<std::int64_t>(b.width-1,std::int64_t(x)*b.width/w)))*4;std::copy(src,src+4,out.rgba.data()+(std::size_t(y)*w+x)*4);}
         scaled.push_back({std::move(out)});
     }
     for(const auto& value:scaled){const auto& b=value.bitmap;layers.push_back({b.x,b.y,b.width,b.height,b.width*4,b.rgba.data(),0,false});}

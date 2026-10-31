@@ -1,15 +1,82 @@
 #include "cyvr/player/application.hpp"
 #include "cyvr/player/locale.hpp"
+#include "cyvr/player/video_view.hpp"
+#include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <optional>
+#include "cyvr/player/subtitle_rasterizer.hpp"
 #include <atomic>
 using namespace cyvr;
 using namespace cyvr::player;
+static void require(bool passed, const char *message) {
+  if (!passed)
+    throw std::runtime_error(message);
+}
+void visible_region_tests() {
+  const float fov[4]{-1.19f, .84f, .93f, -1.11f}; // A Quest 3 eye, tangents.
+  const float pi = 3.14159265f;
+  const auto yaw = [&](float angle) {
+    return cyvr::Quat{0, std::sin(angle / 2), 0, std::cos(angle / 2)};
+  };
+  const auto pitch = [&](float angle) {
+    return cyvr::Quat{std::sin(angle / 2), 0, 0, std::cos(angle / 2)};
+  };
+  const auto ahead = visible_panorama(fov, {0, 0, 0, 1}, 1, .3f);
+  require(ahead.left > .05f && ahead.right < .95f && ahead.top > .05f && ahead.bottom < .95f,
+          "A view straight ahead must leave most of a VR180 frame unconverted");
+  require(ahead.left < .5f && ahead.right > .5f && ahead.top < .5f && ahead.bottom > .5f,
+          "The view axis must stay inside the region");
+  // Every edge ray of the view must land inside its region, for any head pose.
+  for (const auto view : {cyvr::Quat{0, 0, 0, 1}, yaw(.7f), yaw(-.7f), pitch(.6f), pitch(-.6f),
+                          multiply_rotation(yaw(.5f), pitch(.5f))}) {
+    const auto region = visible_panorama(fov, view, 1, .05f);
+    for (int y = 0; y <= 4; ++y)
+      for (int x = 0; x <= 4; ++x) {
+        const float dx = fov[0] + (fov[1] - fov[0]) * x / 4, dy = fov[2] + (fov[3] - fov[2]) * y / 4;
+        const float cx = view.y * -1 - view.z * dy + view.w * dx, cy = view.z * dx + view.x + view.w * dy,
+                    cz = view.x * dy - view.y * dx - view.w;
+        const float rx = dx + 2 * (view.y * cz - view.z * cy), ry = dy + 2 * (view.z * cx - view.x * cz),
+                    rz = -1 + 2 * (view.x * cy - view.y * cx);
+        const float u = std::atan2(rx, -rz) / pi + .5f,
+                    v = .5f - std::asin(ry / std::sqrt(rx * rx + ry * ry + rz * rz)) / pi;
+        require(std::clamp(u, 0.f, 1.f) >= region.left && std::clamp(u, 0.f, 1.f) <= region.right &&
+                    v >= region.top && v <= region.bottom,
+                "Every visible ray must fall inside the converted region");
+      }
+  }
+  const auto up = visible_panorama(fov, pitch(1.5f), 1, .3f);
+  require(up.left == 0 && up.right == 1 && up.top == 0,
+          "Looking at a pole sees every longitude");
+  const auto behind = visible_panorama(fov, yaw(pi), 2, .3f);
+  require(behind.left == 0 && behind.right == 1, "The 360 seam needs the full width");
+  const auto side = visible_panorama(fov, yaw(pi / 2), 2, .3f);
+  require(side.right - side.left < .6f, "A 360 view away from the seam stays partial");
+  require(ahead.contains(visible_panorama(fov, {0, 0, 0, 1}, 1, .08f)),
+          "The widened region must contain the tighter redraw check");
+  const float tangents[4]{-1.19f, .84f, .93f, -1.11f};
+  const auto region = view_filter_region(tangents, {1680, 1760});
+  require(region.x > 840 && region.x < 1100 && region.y > 700 && region.y < 900,
+          "The filter region must follow the asymmetric lens axis");
+}
 int main() {
   try {
+    visible_region_tests();
+    {
+      ImageSettings native,filtered;filtered.quality=3;
+      require(wants_double_rate(true,60,native) && wants_double_rate(true,59.94,native),"60 fps video must double the display rate");
+      require(!wants_double_rate(false,60,native),"120 Hz must stay opt-in");
+      require(!wants_double_rate(true,24,native) && !wants_double_rate(true,30,native),"24 and 30 fps must keep the saved rate");
+      require(!wants_double_rate(true,60,filtered),"Per-eye filters must keep the saved rate");
+      const auto window=window_extent({7680,3840},1600,1100);
+      require(window.width==3200 && window.height==1600,"An 8K frame must convert at twice the window");
+      const auto small=window_extent({1920,960},1600,1100);
+      require(small.width==1920 && small.height==960,"A window must never enlarge the source");
+    }
     const auto root =
         std::filesystem::temp_directory_path() /
         ("cyvr-application-" +
@@ -211,7 +278,7 @@ int main() {
       state.image.quality = 2;
       state.image.zoom = 2.25f;
       state.image.sampling=2;state.image.denoise=.65f;state.image.detail=.8f;
-      state.auto_format=true;
+      state.auto_format=true;state.smooth_video=true;
       state.display_tab = 2;
       state.tracks={3,5,8,"content://test/document/captions"};
       state.tracks.clearkey_file="content://test/document/keys.jwk";
@@ -222,6 +289,7 @@ int main() {
         throw std::runtime_error("State update failed");
       auto loaded = load_application_state(platform.state_file);
       if(!loaded || loaded->image!=state.image)throw std::runtime_error("Spatial image settings lost during checkpoint transfer");
+      if(!loaded->smooth_video)throw std::runtime_error("120 Hz preference lost during checkpoint transfer");
       {
         std::ifstream f(platform.state_file,std::ios::binary);std::string bytes(std::istreambuf_iterator<char>(f),{});f.close();
         const auto tag=bytes.find(std::string("1TLF\0\0\0\0",8));if(tag==std::string::npos)throw std::runtime_error("Spatial image extension missing");bytes.resize(tag);
@@ -490,6 +558,62 @@ int main() {
         auto migrated=load_application_state(platform.state_file);if(!migrated || migrated->scene!=SceneSettings{} || migrated->volume!=1 || !migrated->favorites.empty() || migrated->browser_view!=0)throw std::runtime_error("Previous player state was not migrated with neutral workspace defaults");
       }
       std::filesystem::remove(root/"workspace.bin");
+      std::filesystem::remove(root/"workspace.bin.bak");
+    }
+    {
+      // Indexed caption lookups must keep long and overlapping events.
+      auto cue = [](std::int64_t start, std::int64_t end, const char *text) {
+        auto value = std::make_shared<SubtitleCue>();
+        value->start_us = start;value->end_us = end;value->ass = {text};
+        return value;
+      };
+      for (bool ordered : {true, false}) {
+        SubtitleTimeline timeline(std::make_shared<SubtitleConfig>());
+        timeline.add(cue(0, 100000000, "long"));
+        if (!ordered)
+          timeline.add(cue(9000000, 9500000, "late"));
+        for (int n = 0; n < 200; ++n)
+          timeline.add(cue(n * 1000000ll, n * 1000000ll + 400000, "line"));
+        if (timeline.at(5200000).cues.size() != 2 ||
+            timeline.at(5500000).cues.size() != 1 ||
+            timeline.at(9200000).cues.size() != (ordered ? 2u : 3u) ||
+            timeline.at(150200000).cues.size() != 1 ||
+            timeline.at(150500000).cues.size() != 0 || timeline.at(-1).cues.size() != 0)
+          throw std::runtime_error("Subtitle lookup lost or invented an event");
+      }
+      // The VR caption worker delivers images asynchronously and joins cleanly.
+      SubtitleWorker captions({});
+      SubtitleSnapshot empty;
+      captions.post(empty, 640, 360);
+      std::optional<SubtitleImage> caption;
+      for (int attempt = 0; attempt < 400 && !caption; ++attempt) {
+        caption = captions.take();
+        if (!caption)
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      if (!caption || caption->canvas_width != 640 || !caption->rgba.empty())
+        throw std::runtime_error("Subtitle worker did not deliver its image");
+      // A damaged checkpoint falls back to the previous one, and one overlong
+      // value cannot stop every later save.
+      const auto path = (root / "fallback.bin").u8string();
+      ApplicationState first;first.title = "first";
+      ApplicationState second;second.title = "second";second.source.assign(20000, 'x');
+      if (!save_application_state(path, first) || !save_application_state(path, second))
+        throw std::runtime_error("An overlong source blocked the state file");
+      auto reloaded = load_application_state(path);
+      if (!reloaded || reloaded->title != "second" || !reloaded->source.empty())
+        throw std::runtime_error("Overlong source was not omitted from the state");
+      std::ofstream(path, std::ios::binary | std::ios::trunc) << "broken";
+      reloaded = load_application_state(path);
+      if (!reloaded || reloaded->title != "first")
+        throw std::runtime_error("Damaged state did not fall back to its backup");
+      StateWriter writer;
+      writer.post(path, second);writer.post(path, first);writer.drain();
+      reloaded = load_application_state(path);
+      if (writer.take_failure() || !reloaded)
+        throw std::runtime_error("Background state write failed");
+      std::filesystem::remove(path);std::filesystem::remove(path + ".bak");
+      std::filesystem::remove(root / "state.bin.bak");
     }
     std::ofstream(root / "state.bin", std::ios::binary | std::ios::trunc)
         << "CYVRP04";

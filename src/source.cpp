@@ -55,5 +55,8 @@ void StreamOptions::validate() const {
         probe_bytes < 32768 || probe_bytes > 64*1024*1024 || analyze_us < 0 || analyze_us > 30000000)
         throw std::invalid_argument("Invalid stream timeout or probe budget");
     if (ca_file.find('\0') != std::string::npos) throw std::invalid_argument("Invalid certificate path");
+    if (user_agent.find_first_of(std::string("\r\n\0",3)) != std::string::npos) throw std::invalid_argument("Invalid user agent");
+    if (http_headers.find('\0') != std::string::npos || http_cookies.find('\0') != std::string::npos ||
+        http_headers.size() > 16384 || http_cookies.size() > 16384) throw std::invalid_argument("Invalid web request settings");
 }
 } // namespace cyvr::player

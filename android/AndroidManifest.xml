@@ -22,5 +22,8 @@
             <meta-data android:name="android.app.lib_name" android:value="cyvr_player" />
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.DEFAULT" /><category android:name="com.oculus.intent.category.VR" /><category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" /></intent-filter>
         </activity>
+        <activity android:name="com.cyvr.player.BrowserActivity" android:exported="false" android:process=":browser" android:launchMode="singleTask" android:taskAffinity="com.cyvr.player.browser" android:hardwareAccelerated="true" android:resizeableActivity="true" android:screenOrientation="landscape" android:windowSoftInputMode="adjustResize" android:theme="@android:style/Theme.Black.NoTitleBar" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode">
+            <layout android:defaultWidth="1280dp" android:defaultHeight="880dp" android:minWidth="720dp" android:minHeight="495dp" />
+        </activity>
     </application>
 </manifest>

@@ -12,6 +12,7 @@
 #include "cyvr/player/branding.hpp"
 #include <functional>
 #include <memory>
+#include <tuple>
 #ifdef __ANDROID__
 #include "cyvr/player/android/surface_decoder.hpp"
 #include "cyvr/player/android/audio_playback.hpp"
@@ -22,6 +23,9 @@ struct BrowserItem {
   std::string location, name;
   bool directory{};
   std::uint64_t size{};
+};
+struct WebRequest {
+  std::string headers, user_agent, cookies;
 };
 struct Platform {
   std::string root, ca_file, state_file;
@@ -34,6 +38,11 @@ struct Platform {
   std::function<void()> cancel_documents;
   std::function<std::vector<BrowserItem>()> locations;
   std::function<std::vector<std::uint8_t>(const std::string &)> thumbnail;
+  // Opens the web browser window, in the interface language.
+  std::function<void(const std::string &)> open_browser;
+  // Request settings for a video opened from a web page. These live only in
+  // memory: they can hold session cookies, so they never reach the state file.
+  std::function<WebRequest(const std::string &)> web_request;
 };
 struct PlayerState {
   std::uint64_t revision{},media_id{};
@@ -56,6 +65,33 @@ struct PlayerState {
 // One serialized media worker. UI, filesystem and network never share a lock
 // during blocking I/O. Commands cancel the previous open/read before replacing
 // it.
+// The fields read every display frame, without copying track and chapter lists.
+struct PlayerVideoState {
+  bool ready{}, volumetric{};
+  int width{}, height{};
+  double pixel_aspect{1};
+  double nominal_fps{};
+};
+// Longest whole-character prefix that fits, without measuring every length.
+inline std::string fit_text(cyvr::DrawList &d, std::string_view value, float width,
+                            float size) {
+  if (d.textWidth(size, value) <= width)
+    return std::string(value);
+  std::vector<std::size_t> ends;
+  for (std::size_t n = 1; n < value.size(); ++n)
+    if ((static_cast<unsigned char>(value[n]) & 0xc0) != 0x80)
+      ends.push_back(n);
+  std::size_t low = 0, high = ends.size(), fitted = 0;
+  while (low < high) {
+    const auto middle = (low + high) / 2;
+    if (d.textWidth(size, value.substr(0, ends[middle])) <= width) {
+      fitted = ends[middle];
+      low = middle + 1;
+    } else
+      high = middle;
+  }
+  return std::string(value.substr(0, fitted));
+}
 class PlayerSession {
 public:
   explicit PlayerSession(Platform platform);
@@ -74,6 +110,8 @@ public:
   void volume(float);
   void seek(std::int64_t position_us);
   PlayerState state() const;
+  std::uint64_t revision() const;
+  PlayerVideoState video_state() const;
   VideoMetrics metrics() const;
   void frame_submitted(std::uint64_t epoch, std::int64_t pts_us);
 #ifdef __ANDROID__
@@ -113,6 +151,7 @@ public:
   CinemaSettings cinema;
   SceneSettings scene;
   float volume{1};
+  bool smooth_video{};
   AmbilightSettings ambilight;
   RenderMonitor render_monitor;
   PlayerSession &session() { return session_; }
@@ -135,6 +174,8 @@ private:
   struct PreviewWorker;
   std::unique_ptr<PreviewWorker> previews_;
   std::vector<std::string> preview_requests_;
+  std::tuple<bool, int, int, std::uint64_t> preview_key_{};
+  std::size_t playlist_position_{};
   std::array<bool, 7> preview_present_{};
   std::vector<std::uint8_t> thumbnail_atlas_;
   std::uint64_t preview_revision_{};
@@ -167,6 +208,9 @@ private:
   DetectedVideoLayout detected_layout_;
   void refresh_video_format(bool force = false);
   float minimum_zoom() const { return projection==1 ? .25f : 1.f; }
+public:
+  const std::string &state_file() const { return platform_.state_file; }
+private:
   bool zoom_gesture_[2]{}, stick_latched_[2]{};
   PlaybackControls controls_;
   std::vector<BrowserItem> playlist_;
@@ -183,6 +227,7 @@ private:
   bool suspended_{}, resume_playing_{};
   double last_save_{-1};
   mutable bool state_dirty_{true};
+  mutable StateWriter state_writer_;
   std::string_view tr(std::string_view key) const;
   std::int64_t requested_position_{};
   bool scrubbing_{};

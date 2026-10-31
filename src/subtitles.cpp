@@ -66,6 +66,10 @@ struct SubtitleTimeline::Impl {
     struct Event{std::shared_ptr<const SubtitleCue> cue;std::int64_t end;};
     std::deque<Event> cues;
     std::size_t bytes{};
+    // Events normally arrive in time order, so a lookup need not scan a whole
+    // film's subtitles on every display frame.
+    bool ordered{true};
+    std::int64_t longest{},latest{INT64_MIN};
     static std::size_t size(const SubtitleCue& c){std::size_t n=sizeof(c);for(auto& b:c.bitmaps)n+=b.rgba.size();for(auto& a:c.ass)n+=a.size();return n;}
 };
 SubtitleTimeline::SubtitleTimeline(std::shared_ptr<const SubtitleConfig> config):impl_(std::make_unique<Impl>()){impl_->config=std::move(config);}
@@ -76,12 +80,21 @@ void SubtitleTimeline::add(std::shared_ptr<SubtitleCue> cue){
     if(cue->ass.empty())for(auto& old:impl_->cues)if(old.cue->ass.empty() && old.end>cue->start_us)old.end=cue->start_us;
     const auto bytes=Impl::size(*cue);
     if(bytes>64*1024*1024 || impl_->bytes>64*1024*1024-bytes || impl_->cues.size()>=100000)throw MediaError("Subtitle event budget exceeded");
+    impl_->ordered=impl_->ordered && cue->start_us>=impl_->latest;
+    impl_->latest=std::max(impl_->latest,cue->start_us);
+    impl_->longest=std::max(impl_->longest,cue->end_us-cue->start_us);
     impl_->bytes+=bytes;const auto end=cue->end_us;impl_->cues.push_back({std::move(cue),end});
 }
 void SubtitleTimeline::prune(std::int64_t before){std::lock_guard<std::mutex> lock(impl_->mutex);while(!impl_->cues.empty() && impl_->cues.front().end<before){impl_->bytes-=Impl::size(*impl_->cues.front().cue);impl_->cues.pop_front();}}
 SubtitleSnapshot SubtitleTimeline::at(std::int64_t position)const{
     std::lock_guard<std::mutex> lock(impl_->mutex);SubtitleSnapshot s{impl_->config,{},position};
-    for(auto& event:impl_->cues){const auto& c=event.cue;if(c->start_us<=position && position<event.end && (!c->ass.empty() || !c->bitmaps.empty()))s.cues.push_back(c);}
+    auto first=impl_->cues.begin();auto last=impl_->cues.end();
+    if(impl_->ordered){
+        const auto earliest=position>INT64_MIN+impl_->longest?position-impl_->longest:INT64_MIN;
+        first=std::lower_bound(first,last,earliest,[](const Impl::Event& e,std::int64_t time){return e.cue->start_us<time;});
+        last=std::upper_bound(first,last,position,[](std::int64_t time,const Impl::Event& e){return time<e.cue->start_us;});
+    }
+    for(auto event=first;event!=last;++event){const auto& c=event->cue;if(c->start_us<=position && position<event->end && (!c->ass.empty() || !c->bitmaps.empty()))s.cues.push_back(c);}
     return s;
 }
 }

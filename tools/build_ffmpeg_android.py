@@ -13,15 +13,11 @@ def posix(path):
     value=Path(path).resolve().as_posix()
     return "/"+value[0].lower()+value[2:] if len(value)>2 and value[1]==":" else value
 
-def latest(directory,required):
-    paths=[p for p in directory.iterdir() if p.is_dir() and (p/required).is_file()]
-    return max(paths,key=lambda p:tuple(int(n) for n in p.name.split(".") if n.isdigit()))
-
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--alpha',action='store_true');args=parser.parse_args()
     sdk=Path(os.environ.get("ANDROID_HOME",str(Path(os.environ["LOCALAPPDATA"])/"Android/Sdk")))
-    ndk=latest(sdk/"ndk","build/cmake/android.toolchain.cmake")
-    cmake=latest(sdk/"cmake","bin/cmake.exe")/"bin/cmake.exe"
+    ndk=sdk/"ndk/27.2.12479018"
+    cmake=sdk/"cmake/3.22.1/bin/cmake.exe"
     ninja=cmake.parent/"ninja.exe"
     suffix='-alpha' if args.alpha else ''
     tls_build=ROOT/('build/mbedtls-android'+suffix)

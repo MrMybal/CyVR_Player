@@ -43,12 +43,16 @@ struct VideoRenderer::Impl {
   GpuTimer timer;
   std::optional<double> last_gpu_ms;
   VideoRenderTimings timings;
-  VkRenderPass pass{};
+  VkRenderPass pass{}, keeping_pass{};
   VkCommandPool pool{};
   VkCommandBuffer command{};
   VkFence fence{};
+  // See defer_completion. The semaphore outlives the submission that waits on it.
+  bool deferred{}, reading{};
+  VkSemaphore read_wait{};
   VkShaderModule vertex{}, fragment{};
   VkPipelineCache pipeline_cache{};
+  bool owns_pipeline_cache{};
   PFN_vkDestroyPipelineCache destroy_pipeline_cache{};
   PFN_vkGetAndroidHardwareBufferPropertiesANDROID properties{};
   PFN_vkCreateSamplerYcbcrConversion create_conversion{};
@@ -82,7 +86,8 @@ struct VideoRenderer::Impl {
   VideoExtent processor_input{}, processor_output{};
   int processor_quality{-1};
   using Push = VideoPush;
-  explicit Impl(VulkanContext &g, VkFormat f, const AssetReader &read)
+  explicit Impl(VulkanContext &g, VkFormat f, const AssetReader &read,
+                VkPipelineCache shared_cache)
       : gpu(g), format(f), timer(g), assets(read) {
     auto get = [&](const char *name) {
       auto p = vkGetInstanceProcAddr(gpu.instance, name);
@@ -111,9 +116,12 @@ struct VideoRenderer::Impl {
         get("vkDestroyPipelineCache"));
     VkPipelineCacheCreateInfo cache_info{
         VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    vkCheck(create_pipeline_cache(gpu.device, &cache_info, nullptr,
-                                  &pipeline_cache),
-            "video pipeline cache");
+    owns_pipeline_cache = !shared_cache;
+    pipeline_cache = shared_cache;
+    if (owns_pipeline_cache)
+      vkCheck(create_pipeline_cache(gpu.device, &cache_info, nullptr,
+                                    &pipeline_cache),
+              "video pipeline cache");
     VkAttachmentDescription attachment{};
     attachment.format = format;
     attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -135,6 +143,10 @@ struct VideoRenderer::Impl {
     rp.pSubpasses = &sub;
     vkCheck(vkCreateRenderPass(gpu.device, &rp, nullptr, &pass),
             "video render pass");
+    // OpenXR hands swapchain images over in this layout, content intact.
+    attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCheck(vkCreateRenderPass(gpu.device, &rp, nullptr, &keeping_pass),
+            "video partial render pass");
     VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     cp.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cp.queueFamilyIndex = gpu.queueFamily;
@@ -181,8 +193,10 @@ struct VideoRenderer::Impl {
   }
   ~Impl() {
     vkDeviceWaitIdle(gpu.device);
+    if (read_wait)
+      destroy_semaphore(gpu.device, read_wait, nullptr);
     clear_imports();
-    if (pipeline_cache)
+    if (pipeline_cache && owns_pipeline_cache)
       destroy_pipeline_cache(gpu.device, pipeline_cache, nullptr);
     for (auto &pair : outputs) {
       vkDestroyFramebuffer(gpu.device, pair.second.framebuffer, nullptr);
@@ -193,6 +207,7 @@ struct VideoRenderer::Impl {
     vkDestroyFence(gpu.device, fence, nullptr);
     vkDestroyCommandPool(gpu.device, pool, nullptr);
     vkDestroyRenderPass(gpu.device, pass, nullptr);
+    vkDestroyRenderPass(gpu.device, keeping_pass, nullptr);
   }
   Imported &import(AHardwareBuffer *buffer) {
     auto found = imported.find(buffer);
@@ -217,6 +232,17 @@ struct VideoRenderer::Impl {
     }
     auto &out = imported[buffer];
     out.last_use = ++import_use;
+    try {
+      create_import(out, buffer);
+    } catch (...) {
+      // A partial entry would be returned as valid by the next lookup.
+      destroy_import(out);
+      imported.erase(buffer);
+      throw;
+    }
+    return out;
+  }
+  void create_import(Imported &out, AHardwareBuffer *buffer) {
     AHardwareBuffer_Desc desc{};
     AHardwareBuffer_describe(buffer, &desc);
     out.width = desc.width;
@@ -275,7 +301,15 @@ struct VideoRenderer::Impl {
     conversion.components = fmt.samplerYcbcrConversionComponents;
     conversion.xChromaOffset = fmt.suggestedXChromaOffset;
     conversion.yChromaOffset = fmt.suggestedYChromaOffset;
-    conversion.chromaFilter = VK_FILTER_NEAREST;
+    // Views resample the video at arbitrary positions: nearest taps alias there,
+    // and 4:2:0 chroma would stay blocky even at the source's own size.
+    const VkFilter filter =
+        fmt.formatFeatures &
+                VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT &&
+                fmt.formatFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
+            ? VK_FILTER_LINEAR
+            : VK_FILTER_NEAREST;
+    conversion.chromaFilter = filter;
     const bool rgb = fmt.format == VK_FORMAT_R8G8B8A8_UNORM ||
                      fmt.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
                      fmt.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
@@ -288,8 +322,8 @@ struct VideoRenderer::Impl {
     converted.conversion = out.conversion;
     VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampler.pNext = out.conversion ? &converted : nullptr;
-    sampler.magFilter = VK_FILTER_NEAREST;
-    sampler.minFilter = VK_FILTER_NEAREST;
+    sampler.magFilter = filter;
+    sampler.minFilter = filter;
     sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     sampler.addressModeU = sampler.addressModeV = sampler.addressModeW =
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -400,16 +434,32 @@ struct VideoRenderer::Impl {
     vkCheck(vkCreateGraphicsPipelines(gpu.device, pipeline_cache, 1, &pipeline,
                                       nullptr, &out.pipeline),
             "video pipeline");
-    return out;
+  }
+  void settle() {
+    if (!reading)
+      return;
+    const auto completion_start = std::chrono::steady_clock::now();
+    vkCheck(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, 5'000'000'000ull),
+            "video release completion");
+    reading = false;
+    timings.completion_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - completion_start)
+            .count();
+    last_gpu_ms = timer.result();
+    if (read_wait) {
+      destroy_semaphore(gpu.device, read_wait, nullptr);
+      read_wait = VK_NULL_HANDLE;
+    }
   }
   void convert(VkImage target, std::uint32_t width, std::uint32_t height,
                android::ImageLease &lease, bool sampled_output,
                const ImageSettings &settings, int stereo,
                const VideoView &mapping = {},
-               const std::function<void(VkCommandBuffer)> &finish = {}) {
+               const std::function<void(VkCommandBuffer)> &finish = {},
+               SourceRegion visible = {}) {
     const auto started = std::chrono::steady_clock::now();
-    vkCheck(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, 5'000'000'000ull),
-            "video completion");
+    settle();
     if (epoch != lease.epoch) {
       if (!imported.empty())
         ++timings.cache_resets;
@@ -423,6 +473,8 @@ struct VideoRenderer::Impl {
                             .count();
     timings.cached_images = imported.size();
     auto &output = outputs[target];
+    // An image seen for the first time has nothing to keep around the region.
+    const bool whole = !output.view || visible.contains(SourceRegion{});
     if (!output.view) {
       VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
       view.image = target;
@@ -480,20 +532,6 @@ struct VideoRenderer::Impl {
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &barrier);
-    VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    rp.renderPass = pass;
-    rp.framebuffer = output.framebuffer;
-    rp.renderArea.extent = {width, height};
-    vkCmdBeginRenderPass(command, &rp, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      source.pipeline);
-    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            source.pipeline_layout, 0, 1, &source.set, 0,
-                            nullptr);
-    VkViewport viewport{0, 0, float(width), float(height), 0, 1};
-    VkRect2D scissor{{0, 0}, {width, height}};
-    vkCmdSetViewport(command, 0, 1, &viewport);
-    vkCmdSetScissor(command, 0, 1, &scissor);
     AImageCropRect crop{};
     if (!lease.image() || AImage_getCropRect(lease.image(), &crop) != AMEDIA_OK)
       crop = {0, 0, int32_t(source.width), int32_t(source.height)};
@@ -502,10 +540,40 @@ struct VideoRenderer::Impl {
          float(crop.right - crop.left) / source.width,
          float(crop.bottom - crop.top) / source.height},
         settings, stereo, mapping, lease.color);
-    vkCmdPushConstants(command, source.pipeline_layout,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-    vkCmdDraw(command, 3, 1, 0, 0);
-    vkCmdEndRenderPass(command);
+    const std::uint32_t across = whole || stereo != 1 ? 1 : 2,
+                        down = whole || stereo != 2 ? 1 : 2;
+    for (std::uint32_t y = 0; y < down; ++y)
+      for (std::uint32_t x = 0; x < across; ++x) {
+        const std::uint32_t eye_w = width / across, eye_h = height / down;
+        VkRect2D area{{0, 0}, {width, height}};
+        if (!whole) {
+          const auto first_x = std::uint32_t(visible.left * eye_w),
+                     first_y = std::uint32_t(visible.top * eye_h);
+          area.offset = {int32_t(x * eye_w + first_x),
+                         int32_t(y * eye_h + first_y)};
+          area.extent = {std::min(eye_w - first_x,
+                                  std::uint32_t(std::ceil(visible.right * eye_w)) - first_x),
+                         std::min(eye_h - first_y,
+                                  std::uint32_t(std::ceil(visible.bottom * eye_h)) - first_y)};
+        }
+        VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        rp.renderPass = whole ? pass : keeping_pass;
+        rp.framebuffer = output.framebuffer;
+        rp.renderArea = area;
+        vkCmdBeginRenderPass(command, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          source.pipeline);
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                source.pipeline_layout, 0, 1, &source.set, 0,
+                                nullptr);
+        VkViewport viewport{0, 0, float(width), float(height), 0, 1};
+        vkCmdSetViewport(command, 0, 1, &viewport);
+        vkCmdSetScissor(command, 0, 1, &area);
+        vkCmdPushConstants(command, source.pipeline_layout,
+                           VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+        vkCmdDraw(command, 3, 1, 0, 0);
+        vkCmdEndRenderPass(command);
+      }
     if (sampled_output) {
       VkImageMemoryBarrier output_barrier{
           VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -546,18 +614,15 @@ struct VideoRenderer::Impl {
     }
     vkCheck(vkResetFences(gpu.device, 1, &fence), "video reset fence");
     vkCheck(vkQueueSubmit(gpu.queue, 1, &submit, fence), "video submit");
-    pending_read.submitted = true;
-    const auto completion_start = std::chrono::steady_clock::now();
-    // Initial conservative synchronization: retain AImage until every GPU read
-    // finishes and before xrReleaseSwapchainImage. No CPU pixel access.
-    vkCheck(vkWaitForFences(gpu.device, 1, &fence, VK_TRUE, 5'000'000'000ull),
-            "video release completion");
-    pending_read.submitted = false;
-    timings.completion_ms =
-        std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - completion_start)
-            .count();
-    last_gpu_ms = timer.result();
+    reading = true;
+    if (deferred) {
+      read_wait = sync.semaphore;
+      sync.semaphore = VK_NULL_HANDLE;
+    } else {
+      pending_read.submitted = true;
+      settle();
+      pending_read.submitted = false;
+    }
     if (sync.backup >= 0) {
       ::close(sync.backup);
       sync.backup = -1;
@@ -569,10 +634,10 @@ struct VideoRenderer::Impl {
   }
   void draw(VkImage target, VideoExtent input, VideoExtent output,
             android::ImageLease &lease, const ImageSettings &settings,
-            int stereo, bool sampled) {
+            int stereo, bool sampled, SourceRegion visible = {}) {
     if (!settings.quality) {
       convert(target, output.width, output.height, lease, sampled, settings,
-              stereo);
+              stereo, {}, {}, visible);
       return;
     }
     if (!processor || processor_input.width != input.width ||
@@ -587,8 +652,8 @@ struct VideoRenderer::Impl {
       }
       outputs.clear();
       processor.reset();
-      processor = std::make_unique<ImageProcessor>(gpu, format, assets, input,
-                                                   output, settings.quality);
+      processor = std::make_unique<ImageProcessor>(
+          gpu, format, assets, input, output, settings.quality, pipeline_cache);
       processor_input = input;
       processor_output = output;
       processor_quality = settings.quality;
@@ -623,7 +688,8 @@ struct VideoRenderer::Impl {
       outputs.clear();
       processor.reset();
       processor = std::make_unique<ImageProcessor>(
-          gpu, format, assets, reconstruction, output, settings.quality);
+          gpu, format, assets, reconstruction, output, settings.quality,
+          pipeline_cache);
       processor_input = reconstruction;
       processor_output = output;
       processor_quality = settings.quality;
@@ -638,27 +704,36 @@ struct VideoRenderer::Impl {
     auto corrections = settings;
     corrections.zoom = 1;
     corrections.pan_x = corrections.pan_y = 0;
+    // Views locked to the eyes come back every display frame.
+    const FilterRegion region = mapping.kind >= 2 && mapping.kind != 6
+                                    ? view_filter_region(mapping.fov, output)
+                                    : FilterRegion{};
     convert(processor->source_image(), reconstruction.width,
             reconstruction.height, lease, true, projectionControls, stereo,
             mapping, [&](VkCommandBuffer command) {
-              processor->record(command, target, corrections, 0, sampled);
+              processor->record(command, target, corrections, 0, sampled,
+                                region);
             });
   }
   AssetReader assets;
 };
-VideoRenderer::VideoRenderer(VulkanContext &g, VkFormat f, const AssetReader &r)
-    : impl_(std::make_unique<Impl>(g, f, r)) {}
+VideoRenderer::VideoRenderer(VulkanContext &g, VkFormat f, const AssetReader &r,
+                             VkPipelineCache shared_cache)
+    : impl_(std::make_unique<Impl>(g, f, r, shared_cache)) {}
 VideoRenderer::~VideoRenderer() = default;
 void VideoRenderer::draw(VkImage i, std::uint32_t w, std::uint32_t h,
                          android::ImageLease lease, bool sampled_output) {
   impl_->convert(i, w, h, lease, sampled_output, ImageSettings{}, 0);
+  impl_->settle();
 }
+void VideoRenderer::defer_completion() { impl_->deferred = true; }
+void VideoRenderer::settle() { impl_->settle(); }
 void VideoRenderer::draw_retained(VkImage target, VideoExtent source,
                                   VideoExtent output,
                                   android::ImageLease &lease,
                                   const ImageSettings &image, int stereo,
-                                  bool sampled) {
-  impl_->draw(target, source, output, lease, image, stereo, sampled);
+                                  bool sampled, SourceRegion visible) {
+  impl_->draw(target, source, output, lease, image, stereo, sampled, visible);
 }
 void VideoRenderer::draw_view(VkImage target, VideoExtent reconstruction,
                               VideoExtent output, android::ImageLease &lease,

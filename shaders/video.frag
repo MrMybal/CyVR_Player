@@ -86,12 +86,21 @@ void main(){
     if(kind==4)local.x=fract(local.x);
     vec2 halfPixel=.5*eyes/(vec2(textureSize(video,0))*crop.uvRect.zw);
     local=clamp(local,halfPixel,1.-halfPixel);
-    vec3 encoded=max(sampleVideo(local,eye,eyes),vec3(0));
-    vec3 linear=videoLinear(encoded);
-    if(kind==6 && crop.format.x!=0){
+    vec3 linear;
+    if(kind==6){
+      // Each Ambilight cell covers thousands of source pixels. One tap would
+      // follow whichever small detail lands on it, so average a grid of taps.
+      vec2 spacing=fwidth(uv)/6.;
       vec2 other=vec2(crop.format.x==1?1:0,crop.format.x==2?1:0);
-      linear=.5*(linear+videoLinear(max(sampleVideo(local,other,eyes),vec3(0))));
-    }
+      linear=vec3(0);
+      for(int y=0;y<6;++y)for(int x=0;x<6;++x){
+        vec2 tap=clamp(local+(vec2(x,y)-2.5)*spacing,halfPixel,1.-halfPixel);
+        vec3 sum=videoLinear(max(sampleVideo(tap,eye,eyes),vec3(0)));
+        if(crop.format.x!=0)sum=.5*(sum+videoLinear(max(sampleVideo(tap,other,eyes),vec3(0))));
+        linear+=sum;
+      }
+      linear/=36.;
+    }else linear=videoLinear(max(sampleVideo(local,eye,eyes),vec3(0)));
     // Keep edge RGB beneath transparent coverage. Spatial reconstruction taps
     // must not treat the cinema/VR180 boundary as a black part of the video.
     color=vec4(correctImage(linear,crop.controls),coverage);

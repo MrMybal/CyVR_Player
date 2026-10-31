@@ -10,7 +10,8 @@ namespace cyvr::player {
 class ImageProcessor {
 public:
   ImageProcessor(cyvr::VulkanContext &, VkFormat, const cyvr::AssetReader &,
-                 VideoExtent input, VideoExtent output, int quality = 0);
+                 VideoExtent input, VideoExtent output, int quality = 0,
+                 VkPipelineCache cache = VK_NULL_HANDLE);
   ~ImageProcessor();
   VkImage source_image() const;
   VkImageView source_view() const;
@@ -18,7 +19,7 @@ public:
                bool sampled_output);
   // Caller owns command-buffer lifetime and completion; no extra submit/wait.
   void record(VkCommandBuffer, VkImage output, const ImageSettings &,
-              int stereo, bool sampled_output);
+              int stereo, bool sampled_output, FilterRegion region = {});
   std::optional<double> gpu_ms() const;
 
 private:

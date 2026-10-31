@@ -41,6 +41,9 @@ struct StreamOptions {
     // a PEM exported by SystemCertificates from the platform trust manager.
     std::string ca_file;
     std::vector<ContentKey> clear_keys;
+    // Request settings of a video found on a web page. Cookies use FFmpeg's
+    // domain-scoped list, so a playlist cannot send them to another host.
+    std::string http_headers, user_agent, http_cookies;
     int disc_title = -1, disc_angle = 0;
     void validate() const;
 };

@@ -27,6 +27,7 @@ void append(std::vector<std::uint8_t>& target,const std::uint8_t* begin,const st
 }
 }
 struct VideoBitstream::Impl {
+    PacketPtr spare; // Polling usually finds no packet; keep its allocation.
     AVBSFContext* filter=nullptr;
     VideoConfiguration configuration;
     bool avc=false,vps=false,sps=false,pps=false,annex=true;
@@ -113,9 +114,11 @@ bool VideoBitstream::send(const AVPacket* packet){
     check(result,"Filter compressed packet");return true;
 }
 PacketRead VideoBitstream::receive(){
-    PacketPtr packet(av_packet_alloc());if(!packet) throw std::bad_alloc();
+    PacketPtr packet=std::move(impl_->spare);
+    if(!packet)packet.reset(av_packet_alloc());
+    if(!packet) throw std::bad_alloc();
     const int result=av_bsf_receive_packet(impl_->filter,packet.get());
-    if(result==AVERROR(EAGAIN)) return {ReadStatus::again,{}};
+    if(result==AVERROR(EAGAIN)){impl_->spare=std::move(packet);return {ReadStatus::again,{}};}
     if(result==AVERROR_EOF) return {ReadStatus::end,{}};
     check(result,"Read filtered packet");
     if(impl_->annex && (!impl_->ready() || !impl_->inspected_first_packet))impl_->collect(packet->data,std::size_t(packet->size));

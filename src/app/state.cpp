@@ -1,15 +1,21 @@
 #include "cyvr/player/state.hpp"
 #include <algorithm>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 namespace cyvr::player {
 namespace {
@@ -48,6 +54,35 @@ struct Codec {
     return s;
   }
 };
+// Reaches storage before the rename, so a power loss cannot leave an empty file.
+bool write_durable(const std::filesystem::path &path, const std::string &bytes) {
+#ifdef _WIN32
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  file.write(bytes.data(), std::streamsize(bytes.size()));
+  file.flush();
+  return bool(file);
+#else
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (fd < 0)
+    return false;
+  std::size_t written = 0;
+  while (written < bytes.size()) {
+    const auto count = ::write(fd, bytes.data() + written, bytes.size() - written);
+    if (count <= 0) {
+      ::close(fd);
+      return false;
+    }
+    written += std::size_t(count);
+  }
+  const bool synced = ::fsync(fd) == 0;
+  return ::close(fd) == 0 && synced;
+#endif
+}
+// One overlong value, such as a huge VIEW URL, must not block every later save.
+const std::string &storable(const std::string &value) {
+  static const std::string empty;
+  return value.size() > 16384 ? empty : value;
+}
 } // namespace
 bool save_application_state(const std::string &path,
                             const ApplicationState &s) noexcept {
@@ -57,8 +92,8 @@ bool save_application_state(const std::string &path,
     Codec c;
     c.put(s.directory);
     c.put(s.url);
-    c.put(s.source);
-    c.put(s.title);
+    c.put(storable(s.source));
+    c.put(storable(s.title));
     if (s.parents.size() > 128)
       throw std::runtime_error("State navigation budget exceeded");
     c.put(s.parents.size());
@@ -110,33 +145,35 @@ bool save_application_state(const std::string &path,
     if(s.favorites.size()>16)throw std::runtime_error("Folder bookmark limit exceeded");
     c.put(s.favorites.size());
     for(const auto& favorite:s.favorites){c.put(favorite.location);c.put(favorite.name);if(favorite.parents.size()>32)throw std::runtime_error("Bookmark navigation limit exceeded");c.put(favorite.parents.size());for(const auto& parent:favorite.parents)c.put(parent);}
+    c.put(std::uint64_t(0x485a3132));c.put(s.smooth_video?1:0);
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
     const auto destination = std::filesystem::u8path(path),
                temporary = std::filesystem::u8path(path + ".tmp");
     std::filesystem::create_directories(destination.parent_path());
-    {
-      std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-      file.write(c.bytes.data(), c.bytes.size());
-      file.flush();
-      if (!file)
-        return false;
-    }
+    if (!write_durable(temporary, c.bytes))
+      return false;
+    // Keep the previous checkpoint: it is the fallback for a damaged file.
+    std::error_code absent;
+    std::filesystem::rename(destination, std::filesystem::u8path(path + ".bak"), absent);
 #ifdef _WIN32
     return MoveFileExW(temporary.c_str(), destination.c_str(),
                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
-    return std::rename(temporary.c_str(), destination.c_str()) == 0;
+    if (std::rename(temporary.c_str(), destination.c_str()) != 0)
+      return false;
+    if (const int directory = ::open(destination.parent_path().c_str(), O_RDONLY | O_CLOEXEC); directory >= 0) {
+      ::fsync(directory);
+      ::close(directory);
+    }
+    return true;
 #endif
   } catch (...) {
     return false;
   }
 }
-std::optional<ApplicationState>
-load_application_state(const std::string &path) noexcept {
-  if (path.empty())
-    return {};
+static std::optional<ApplicationState> read_state(const std::string &path) noexcept {
   try {
     std::ifstream file(std::filesystem::u8path(path),
                        std::ios::binary | std::ios::ate);
@@ -224,6 +261,7 @@ load_application_state(const std::string &path) noexcept {
               const auto count=c.get();if(count>16)return {};
               for(unsigned i=0;i<count;++i){FolderBookmark favorite;favorite.location=c.string();favorite.name=c.string();const auto parents=c.get();if(parents>32)return {};for(unsigned n=0;n<parents;++n)favorite.parents.push_back(c.string());s.favorites.push_back(std::move(favorite));}
             }
+            if(c.cursor<c.bytes.size()){if(c.get()!=0x485a3132)return {};const auto enabled=c.get();if(enabled>1)return {};s.smooth_video=enabled!=0;}
           }
         }
       }
@@ -234,5 +272,65 @@ load_application_state(const std::string &path) noexcept {
   } catch (...) {
     return {};
   }
+}
+std::optional<ApplicationState>
+load_application_state(const std::string &path) noexcept {
+  if (path.empty())
+    return {};
+  if (auto state = read_state(path))
+    return state;
+  return read_state(path + ".bak");
+}
+struct StateWriter::Impl {
+  std::mutex mutex;
+  std::condition_variable wake;
+  std::thread worker;
+  std::optional<std::pair<std::string, ApplicationState>> waiting;
+  bool writing{}, quit{}, failed{};
+  void run() {
+    std::unique_lock<std::mutex> lock(mutex);
+    for (;;) {
+      wake.wait(lock, [&] { return quit || waiting; });
+      if (!waiting)
+        return;
+      auto next = std::move(*waiting);
+      waiting.reset();
+      writing = true;
+      lock.unlock();
+      const bool saved = save_application_state(next.first, next.second);
+      lock.lock();
+      writing = false;
+      failed = failed || !saved;
+      wake.notify_all();
+    }
+  }
+};
+StateWriter::StateWriter() : impl_(std::make_unique<Impl>()) {}
+StateWriter::~StateWriter() {
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->quit = true;
+  }
+  impl_->wake.notify_all();
+  if (impl_->worker.joinable())
+    impl_->worker.join();
+}
+void StateWriter::post(std::string path, ApplicationState state) {
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->waiting.emplace(std::move(path), std::move(state));
+    if (!impl_->worker.joinable())
+      impl_->worker = std::thread([impl = impl_.get()] { impl->run(); });
+  }
+  impl_->wake.notify_all();
+}
+void StateWriter::drain() {
+  std::unique_lock<std::mutex> lock(impl_->mutex);
+  impl_->waiting.reset();
+  impl_->wake.wait(lock, [&] { return !impl_->writing; });
+}
+bool StateWriter::take_failure() {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return std::exchange(impl_->failed, false);
 }
 } // namespace cyvr::player

@@ -70,8 +70,74 @@ inline ViewProcessingPlan view_processing_plan(VideoExtent display,
     // determines the geometry. FSR/GSR receive the independent input sizes.
     input = {std::min(output.width, std::max(1u, available.width)),
              std::min(output.height, std::max(1u, available.height))};
+    // EASU costs a full pass, which a slight enlargement does not repay.
+    if (input.width * 20 >= output.width * 17 &&
+        input.height * 20 >= output.height * 17)
+      input = output;
   }
   return {input, output};
+}
+// A world-locked cinema screen is filtered once per decoded frame and handed to
+// the compositor, so its size follows the screen's density rather than the head.
+struct ScreenView {
+  VideoExtent source; // Packed decoded frame, both eyes for stereo.
+  float aspect{};     // Displayed aspect ratio of one eye.
+  int stereo{};       // 0 mono, 1 side by side, 2 top and bottom.
+  float pixels_per_radian{}, angular_width{}, frame_rate{};
+};
+inline ViewProcessingPlan screen_processing_plan(const ScreenView &view,
+                                                 const ImageSettings &image) {
+  const std::uint32_t across = view.stereo == 1 ? 2 : 1,
+                      down = view.stereo == 2 ? 2 : 1;
+  const float display_w =
+      std::max(16.f, view.pixels_per_radian * view.angular_width);
+  const float display_h = display_w / std::max(.1f, view.aspect);
+  // A sharper source keeps its detail, unless high frame rates leave no budget.
+  const float headroom = view.frame_rate > 40 ? 1.25f : 2.f;
+  const auto density = [&](float display, float source) {
+    return std::max(display, std::min(source, display * headroom));
+  };
+  // Multiples of eight stay even for stereo and absorb small aspect changes.
+  const auto stable = [](float size) {
+    return (std::uint32_t(std::ceil(size)) + 7u) & ~7u;
+  };
+  const VideoExtent display{
+      stable(density(display_w, float(view.source.width) / across)) * across,
+      stable(density(display_h, float(view.source.height) / down)) * down};
+  auto plan = view_processing_plan(display, view.source, image);
+  plan.input.width &= ~1u;
+  plan.input.height &= ~1u;
+  return plan;
+}
+// Output pixels that get the full filter, centred on the lens axis. Radius 0
+// filters the whole image.
+struct FilterRegion {
+  std::uint32_t x{}, y{}, radius_x{}, radius_y{};
+};
+// A view rendered per eye has no budget for filtering what the lens periphery
+// cannot resolve. fov holds tangents left, right, up, down.
+inline FilterRegion view_filter_region(const float (&fov)[4],
+                                       VideoExtent output) {
+  constexpr float reach = .7f; // tan(35 degrees)
+  const float width = fov[1] - fov[0], height = fov[2] - fov[3];
+  return {std::uint32_t(output.width * -fov[0] / width),
+          std::uint32_t(output.height * fov[2] / height),
+          std::uint32_t(output.width * reach / width),
+          std::uint32_t(output.height * reach / height)};
+}
+// A window shows a fraction of an 8K frame, and converting all of it misses the
+// frame rate. Twice its size keeps the picture sharp through the final scaling.
+inline VideoExtent window_extent(VideoExtent source, float width, float height) {
+  const float scale = std::min({1.f, 2 * width / std::max(1u, source.width),
+                                2 * height / std::max(1u, source.height)});
+  return {std::max(2u, std::uint32_t(source.width * scale) & ~1u),
+          std::max(2u, std::uint32_t(source.height * scale) & ~1u)};
+}
+// 72 Hz repeats every sixth frame of a 60 fps video; 120 Hz shows each one twice.
+// Per-eye filters have no budget left at that rate.
+inline bool wants_double_rate(bool enabled, double frame_rate,
+                              const ImageSettings &image) {
+  return enabled && std::abs(frame_rate - 60) < 1.5 && !image.reconstruct_view();
 }
 // Standalone shader diagnostics: explicit reconstruction of a small fixture.
 inline VideoExtent processed_extent(std::uint32_t w, std::uint32_t h,

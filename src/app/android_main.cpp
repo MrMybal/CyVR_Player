@@ -4,16 +4,51 @@
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <mutex>
+#include <unistd.h>
+#include <vector>
 namespace {
 std::mutex activityHost;
+// The glue blocks Java's lifecycle callbacks until this thread answers them, and
+// the outgoing host only exits once Java delivers its destruction. Keep answering
+// while waiting, then replay those commands for the host that starts afterwards.
+std::unique_lock<std::mutex> claim_host(android_app *android) {
+  std::unique_lock<std::mutex> lock(activityHost, std::try_to_lock);
+  if (lock)
+    return lock;
+  std::vector<int8_t> deferred;
+  android->userData = &deferred;
+  android->onAppCmd = [](android_app *app, int32_t command) {
+    static_cast<std::vector<int8_t> *>(app->userData)
+        ->push_back(int8_t(command));
+  };
+  while (!lock.try_lock() && !android->destroyRequested) {
+    android_poll_source *source{};
+    if (ALooper_pollOnce(10, nullptr, nullptr,
+                         reinterpret_cast<void **>(&source)) >= 0 &&
+        source)
+      source->process(android, source);
+  }
+  android->onAppCmd = nullptr;
+  android->userData = nullptr;
+  for (const auto command : deferred)
+    if (command != APP_CMD_SAVE_STATE && command != APP_CMD_DESTROY &&
+        ::write(android->msgwrite, &command, sizeof command) != sizeof command)
+      __android_log_print(ANDROID_LOG_WARN, "CyVRPlayer",
+                          "HOST_COMMAND_LOST command=%d", int(command));
+  return lock;
 }
+} // namespace
 extern "C" void android_main(android_app *android) {
   JNIEnv *env{};
   android->activity->vm->AttachCurrentThread(&env, nullptr);
   try {
     // An external panel launch may overlap the outgoing activity's teardown.
     // Serialize hosts so its durable state and decoder shutdown finish first.
-    std::lock_guard<std::mutex> exclusive(activityHost);
+    const auto exclusive = claim_host(android);
+    if (android->destroyRequested) {
+      android->activity->vm->DetachCurrentThread();
+      return;
+    }
     cyvr::player::AndroidBridge bridge(android);
     auto platform = bridge.platform();
     platform.panorama = CYVR_ENABLE_IMMERSIVE;

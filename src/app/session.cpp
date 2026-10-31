@@ -35,6 +35,8 @@ struct PlayerSession::Impl {
   std::string location, title;
   PlayerState state;
   TrackSelection requested_selection,active_selection;
+  std::shared_ptr<SubtitleConfig> subtitle_config;
+  std::shared_ptr<SubtitleTimeline> external_timeline;
   std::unique_ptr<SubtitleDecoder> subtitle_decoder;
   int subtitle_stream{-1};
   std::shared_ptr<SubtitleTimeline> subtitle_timeline;
@@ -81,6 +83,11 @@ struct PlayerSession::Impl {
       std::string target, name;
       std::int64_t start_us{};
       std::shared_ptr<Cancellation> cancel;
+#ifdef __ANDROID__
+      // Closing an AAudio stream can block. The render thread needs this mutex
+      // every frame, so outgoing streams are destroyed after it is released.
+      std::shared_ptr<android::AudioPlayback> retired_audio;
+#endif
       {
         std::unique_lock<std::mutex> lock(mutex);
         wake.wait(lock, [&] { return quit || open_pending || stop_pending; });
@@ -90,7 +97,7 @@ struct PlayerSession::Impl {
           stop_pending = false;
           splat_frame={};subtitle_timeline.reset();
 #ifdef __ANDROID__
-          audio.reset();
+          retired_audio = std::move(audio);
 #endif
           state = PlayerState{state.revision + 1};
         }
@@ -103,12 +110,14 @@ struct PlayerSession::Impl {
         start_us = requested_start;
         active_selection=requested_selection;
         subtitle_decoder.reset();subtitle_timeline.reset();subtitle_stream=-1;
+        subtitle_config.reset();external_timeline.reset();
         splat_frame={};
         pause_after_first = !requested_autoplay;
         seek_pending = -1;
         cancellation = cancel = std::make_shared<Cancellation>();
 #ifdef __ANDROID__
         frames.clear();
+        if(!retired_audio)retired_audio=std::move(audio);
         audio.reset();audio_pending.reset();audio_stream=-1;
 #endif
         state = PlayerState{state.revision + 1};
@@ -117,6 +126,9 @@ struct PlayerSession::Impl {
         counters={};decoded_rate.reset();submitted_rate.reset();unique_submissions.reset();
         state.title = name;
       }
+#ifdef __ANDROID__
+      retired_audio.reset();
+#endif
       try {
         if(classify_extension(std::filesystem::u8path(name))==FileKind::splat || classify_extension(std::filesystem::u8path(target))==FileKind::splat){play_splats(target,cancel,start_us);continue;}
         Demuxer input;
@@ -141,6 +153,12 @@ struct PlayerSession::Impl {
                              : target.find("://") != std::string::npos
                                  ? MediaSource::network(target)
                                  : MediaSource::file(target);
+        if (source.kind == SourceKind::network && platform.web_request) {
+          auto request = platform.web_request(target);
+          options.http_headers = std::move(request.headers);
+          options.user_agent = std::move(request.user_agent);
+          options.http_cookies = std::move(request.cookies);
+        }
         try {
           input.open(source, options, cancel);
         } catch (...) {
@@ -227,7 +245,7 @@ struct PlayerSession::Impl {
     const bool animated=bytes.size()>=21 && std::memcmp(bytes.data(),"CYVR_SPLAT_SEQUENCE 1",21)==0;
     if(animated)sequence=splat_sequence(path,bytes);else sequence.frames={path};
     SplatNormalization normalization;
-    auto cloud=decode_splats(animated?splat_bytes(sequence.frames.front(),cancel):bytes,normalization,*cancel);
+    auto cloud=animated?decode_splats(splat_bytes(sequence.frames.front(),cancel),normalization,*cancel):decode_splats(bytes,normalization,*cancel);
     bytes.clear();bytes.shrink_to_fit();
     const auto duration=animated?std::int64_t(double(sequence.frames.size())*1000000/sequence.fps):0;
     start=animated?std::clamp<std::int64_t>(start,0,duration-1):0;
@@ -258,7 +276,8 @@ struct PlayerSession::Impl {
     std::shared_ptr<android::AudioPlayback> output;
     if(next>=0){try{output=std::make_shared<android::AudioPlayback>(input,next,start_us,volume.load());}catch(const std::exception& e){publish([&](PlayerState& s){s.audio_status=e.what();s.audio_track=-1;});next=-1;}}
     std::lock_guard<std::mutex> lock(mutex);
-    audio=std::move(output);audio_stream=next;audio_pending.reset();audio_eos=false;
+    std::swap(audio,output); // output now holds the old stream until the lock is released.
+    audio_stream=next;audio_pending.reset();audio_eos=false;
     if(audio)audio->volume(volume.load());
     video_lookahead.clear();lookahead_bytes=0;demux_end=false;
   }
@@ -268,10 +287,15 @@ struct PlayerSession::Impl {
   void load_subtitles(Demuxer& input,const std::shared_ptr<Cancellation>& cancel){
     subtitle_decoder.reset();
     int next;{std::lock_guard<std::mutex> lock(mutex);next=state.subtitle_track;}
-    auto config=std::make_shared<SubtitleConfig>();config->fonts=input.fonts();
+    const auto& path=active_selection.external_subtitle;
+    // A seek keeps the same fonts and external events. Reloading them would also
+    // rebuild every font in the rasterizer.
+    if(path.empty() && next<0){subtitle_stream=next;std::lock_guard<std::mutex> lock(mutex);subtitle_timeline.reset();return;}
+    if(!path.empty() && external_timeline){subtitle_stream=-1;std::lock_guard<std::mutex> lock(mutex);subtitle_timeline=external_timeline;return;}
+    if(!subtitle_config){subtitle_config=std::make_shared<SubtitleConfig>();subtitle_config->fonts=input.fonts();}
+    const auto config=subtitle_config;
     std::shared_ptr<SubtitleTimeline> timeline;
-    if(!active_selection.external_subtitle.empty()){
-      const auto& path=active_selection.external_subtitle;
+    if(!path.empty()){
       const auto source=path.rfind("content://",0)==0?platform.open_document(path):MediaSource::file(path);
       Demuxer external;StreamOptions options;options.ca_file=platform.ca_file;
       try{external.open(source,options,cancel);}catch(...){if(source.kind==SourceKind::descriptor)::close(source.fd);throw;}
@@ -282,7 +306,7 @@ struct PlayerSession::Impl {
       timeline=std::make_shared<SubtitleTimeline>(config);
       std::size_t bytes=0;
       for(;;){auto p=external.read();if(p.status==ReadStatus::end)break;if(p.status==ReadStatus::packet && p.packet->stream_index==track){bytes+=p.packet->size;if(bytes>16*1024*1024)throw MediaError("External subtitles exceed the loading budget");timeline->add(decoder.decode(p.packet.get()));}}
-      next=-1;
+      next=-1;external_timeline=timeline;
     }else if(next>=0){subtitle_decoder=std::make_unique<SubtitleDecoder>(input,next);config->header=subtitle_decoder->header();timeline=std::make_shared<SubtitleTimeline>(config);}
     subtitle_stream=next;
     std::lock_guard<std::mutex> lock(mutex);subtitle_timeline=std::move(timeline);
@@ -343,7 +367,8 @@ struct PlayerSession::Impl {
     }
   }
   void audio_failure(const std::exception& e){
-    std::lock_guard<std::mutex> lock(mutex);if(audio)audio->pause(true);audio.reset();audio_stream=-1;clock_started=false;state.audio_track=-1;state.audio_status=e.what();++state.revision;
+    std::shared_ptr<android::AudioPlayback> retired;
+    std::lock_guard<std::mutex> lock(mutex);if(audio)audio->pause(true);retired=std::move(audio);audio_stream=-1;clock_started=false;state.audio_track=-1;state.audio_status=e.what();++state.revision;
   }
   void pump_audio(){if(audio)try{audio->pump();}catch(const std::exception& e){audio_failure(e);}}
   bool send_audio(const AVPacket* packet){if(!audio)return true;try{return audio->send(packet);}catch(const std::exception& e){audio_failure(e);return true;}}
@@ -377,6 +402,7 @@ struct PlayerSession::Impl {
           progress=true;
           if(frame.pts_us<start_us)last_preroll=std::move(frame);
           else{
+            last_preroll={};
             AHardwareBuffer_Desc desc{};AHardwareBuffer_describe(frame.hardware_buffer(),&desc);
             std::lock_guard<std::mutex> lock(mutex);
             if(cancel->cancelled() || seek_pending>=0)continue;
@@ -487,7 +513,7 @@ struct PlayerSession::Impl {
       bool input_end = false, filter_eos = false, filter_end = false,
            codec_eos = false, output_end = false;
       std::int64_t last_queued = 1'000'000;
-      auto last_output = Clock::now();
+      auto last_output = Clock::now(), last_input = Clock::now();
       unsigned decoded = 0;
       android::ImageLease last_preroll;
       {
@@ -513,16 +539,18 @@ struct PlayerSession::Impl {
           }
           if (paused) {
             wake.wait_for(lock, std::chrono::milliseconds(3));
+            last_output = Clock::now();
             continue;
           }
         }
         prefetch_audio(input,video);
-        {std::unique_lock<std::mutex> lock(mutex);if(frames.size()>=3){wake.wait_for(lock,std::chrono::milliseconds(3));continue;}}
+        {std::unique_lock<std::mutex> lock(mutex);if(frames.size()>=3){wake.wait_for(lock,std::chrono::milliseconds(3));last_output=Clock::now();continue;}}
         auto image = decoder.try_acquire_next();
         if (image) {
           image.pts_us -= 1'000'000;
           if (image.pts_us < discard_before) {
             last_preroll = std::move(image);
+            last_output = Clock::now();
             continue;
           }
           last_preroll = {};
@@ -565,6 +593,7 @@ struct PlayerSession::Impl {
             last_queued = *pts + 1'000'000;
             pending.reset();
             progress = true;
+            last_input = Clock::now();
           }
         }
         if (!original && !input_end && !pending) {
@@ -625,7 +654,10 @@ struct PlayerSession::Impl {
         }
         if (!progress)
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        if(!output_end && Clock::now()-last_output>std::chrono::seconds(10))throw MediaError("Hardware video decoder stalled");
+        // A silent decoder only counts while it has input: a stalled network or a
+        // long source gap is not a decoder failure.
+        const auto stall_check=Clock::now();
+        if(!output_end && stall_check-last_output>std::chrono::seconds(10) && (pending || stall_check-last_input<std::chrono::seconds(1)))throw MediaError("Hardware video decoder stalled");
       }
       if (!restart)
         break;
@@ -634,7 +666,9 @@ struct PlayerSession::Impl {
         decoder.close();
         if(!input.seekable())throw;
         std::int64_t position;
-        {std::lock_guard<std::mutex> lock(mutex);position=std::max(discard_before,state.position_us);frames.clear();if(audio)audio->pause(true);audio.reset();clock_started=false;}
+        std::shared_ptr<android::AudioPlayback> retired;
+        {std::lock_guard<std::mutex> lock(mutex);position=std::max(discard_before,state.position_us);frames.clear();if(audio)audio->pause(true);retired=std::move(audio);clock_started=false;}
+        retired.reset();
         input.seek(position);begin_subtitles(input,cancel);
         __android_log_print(ANDROID_LOG_WARN,"CyVRPlayer","HARDWARE_FALLBACK software_retry=1");
         play_software(input,video,cancel,position,config.color);return;
@@ -642,6 +676,7 @@ struct PlayerSession::Impl {
     }
   }
   bool clock_started{};
+  std::int64_t published_position{};
   Clock::time_point clock_base{};
   std::int64_t pts_base{};
   std::uint64_t presented_epoch{};
@@ -664,7 +699,7 @@ TrackSelection PlayerSession::selection()const{std::lock_guard<std::mutex> lock(
 SplatSnapshot PlayerSession::splats()const{std::lock_guard<std::mutex> lock(impl_->mutex);return impl_->splat_frame;}
 bool PlayerSession::select_track(TrackKind kind,int index){
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if(!impl_->state.ready || !impl_->state.seekable || impl_->open_pending)return false;
+  if(!impl_->state.ready || impl_->location.empty() || !impl_->state.seekable || impl_->open_pending)return false;
   if(index<0 && (index!=-1 || kind==TrackKind::video))return false;
   if(index>=0 && std::none_of(impl_->state.tracks.begin(),impl_->state.tracks.end(),[&](const auto& t){return t.index==index && t.kind==kind && !t.attached_picture;}))return false;
   if(kind==TrackKind::video)for(const auto& t:impl_->state.tracks)if(t.index==index && t.companion_video>=0){index=t.companion_video;break;}
@@ -683,7 +718,7 @@ bool PlayerSession::select_track(TrackKind kind,int index){
 }
 bool PlayerSession::select_disc_title(int index,int angle){
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if(!impl_->state.ready || !impl_->state.seekable || impl_->open_pending || angle<0)return false;
+  if(!impl_->state.ready || impl_->location.empty() || !impl_->state.seekable || impl_->open_pending || angle<0)return false;
   const auto& disc=impl_->state.disc;
   const auto it=std::find_if(disc.titles.begin(),disc.titles.end(),[&](const auto& t){return t.index==index;});
   if(it==disc.titles.end() || unsigned(angle)>=it->angles)return false;
@@ -700,7 +735,7 @@ bool PlayerSession::select_disc_title(int index,int angle){
 }
 bool PlayerSession::external_subtitle(std::string path){
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if(!impl_->state.ready || !impl_->state.seekable || impl_->open_pending)return false;
+  if(!impl_->state.ready || impl_->location.empty() || !impl_->state.seekable || impl_->open_pending)return false;
   impl_->requested_selection.external_subtitle=std::move(path);
   impl_->requested_selection.subtitle=-1;
   impl_->requested_start=impl_->state.position_us;impl_->requested_autoplay=impl_->state.playing;
@@ -762,6 +797,8 @@ void PlayerSession::stop() {
 #endif
   impl_->stop_pending = true;
   impl_->open_pending = false;
+  impl_->location.clear();
+  impl_->requested_selection = {};
 #ifdef __ANDROID__
   impl_->frames.clear();
   impl_->clock_started = false;
@@ -824,6 +861,15 @@ PlayerState PlayerSession::state() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->state;
 }
+std::uint64_t PlayerSession::revision() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->state.revision;
+}
+PlayerVideoState PlayerSession::video_state() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const auto &s = impl_->state;
+  return {s.ready, s.volumetric, s.width, s.height, s.pixel_aspect, s.nominal_fps};
+}
 VideoMetrics PlayerSession::metrics()const{
   std::lock_guard<std::mutex> lock(impl_->mutex);auto result=impl_->counters;
   result.decode_rate=impl_->decoded_rate.sample(performance_now());result.submit_rate=impl_->submitted_rate.sample(performance_now());
@@ -870,8 +916,9 @@ android::ImageLease PlayerSession::take_frame() {
     image = std::move(impl_->frames.front());
     impl_->frames.pop_front();
   }
-  if (impl_->state.seeking || std::abs(image.pts_us - impl_->state.position_us) > 200000) {
+  if (impl_->state.seeking || std::abs(image.pts_us - impl_->published_position) > 200000) {
     ++impl_->state.revision;
+    impl_->published_position = image.pts_us;
   }
   impl_->state.position_us = image.pts_us;
   impl_->state.seeking = false;

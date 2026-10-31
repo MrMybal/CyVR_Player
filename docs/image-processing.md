@@ -102,3 +102,19 @@ Manual scene offsets and rotations compose with the independent movie anchor. ST
 Application state adds a BRS1 extension for list/card mode, favorite folders with parent navigation, manual scene controls and volume. Older checkpoints default to list view, neutral placement and unity volume. The volume target is atomic; ramping runs inside AudioQueue's callback with no allocation, lock or timeline change. The initial decoder output starts at the stored gain, so a muted new stream does not emit a unity-gain transient.
 
 Since 0.4.12 Alpha 2, the UI image atlas is 160×800: the same seven 160×90 preview cells, a ten-pixel gap, then a static 160×160 player logo. Preview updates replace only their cells and retain the logo. Both hosts upload the same atlas, including after renderer recreation. The master PNG also supplies Android's standard/adaptive launcher icons and the README image; resizing happens at build time.
+
+## VR180 and VR360
+
+Native playback hands the video to the compositor, which samples it at panel density. Only the part of the frame the head can reach before the next video frame is converted, 59% of a VR180 frame on Quest 3. Pixels outside it keep their previous content, and turning past it without a new frame, as in pause, triggers a redraw.
+
+A filter cannot run on the sphere texture within budget at 60 fps, so it renders each eye's view on every display frame. Those views use panel resolution, about 1.25 times the size OpenXR recommends, because a smaller view looks softer than Native. The full filter stops 35 degrees from the lens axis, and the rest is only resampled. EASU is skipped when it would enlarge by less than 15%, which is the usual case for 8K: FSR then runs RCAS alone.
+
+Video sampling is bilinear for luma and chroma when the decoder format allows it.
+
+In immersive sessions the frame loop does not wait for this work. The decoded image stays retained until the next one replaces it, and only then does the renderer wait for the GPU. The option **120 Hz for 60 fps video** requests 120 Hz while a 59-61 fps video plays without per-eye filters. It leaves the saved refresh rate untouched and is off by default. The panel window converts at twice its own size at most.
+
+## Cinema screens
+
+Flat and curved cinema screens no longer use per-eye reprojection when filters are active. `screen_processing_plan` picks one texture size from the screen's angular width, and `draw_retained` filters each decoded frame into the same swapchain as Native playback. The compositor reprojects that layer for each eye, so filter cost follows the video frame rate instead of the display rate, and head movement never changes the plan.
+
+VR180/360 still reconstruct each eye's view at every display frame, because only the visible part of a large panorama is processed.

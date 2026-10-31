@@ -5,8 +5,20 @@
 #include <iostream>
 #include <thread>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <vector>
 using namespace cyvr;
 using namespace cyvr::player;
+// CYVR_PROBE_INPUT and CYVR_PROBE_OUTPUT (WIDTHxHEIGHT) reproduce a filter plan for GPU timing.
+static std::optional<VideoExtent> probe_extent(const char *name) {
+  unsigned width{}, height{};
+  const char *value = std::getenv(name);
+  if (!value || std::sscanf(value, "%ux%u", &width, &height) != 2)
+    return std::nullopt;
+  return VideoExtent{width, height};
+}
 int main(int argc, char **argv) {
   try {
     if (argc < 5 || argc > 8)
@@ -83,6 +95,9 @@ int main(int argc, char **argv) {
     VideoMetrics metrics;
     std::string decoder_name;
     std::optional<android::AudioPlaybackStats> audio_metrics;
+    std::vector<double> gpu_ms, wall_ms;
+    const auto forced_input = probe_extent("CYVR_PROBE_INPUT");
+    const auto forced_output = probe_extent("CYVR_PROBE_OUTPUT");
     {
       VideoRenderer video(gpu, VK_FORMAT_R8G8B8A8_SRGB, assets);
       auto start = std::chrono::steady_clock::now();
@@ -106,13 +121,17 @@ int main(int argc, char **argv) {
           }
           old_epoch = image.epoch;
           if (!target.image) {
-            const auto extent =
+            const auto extent = forced_output ? *forced_output :
                 processed_extent(state.width, state.height, settings, state.multiview?1:0);
             target = targets.createTarget(extent.width, extent.height);
           }
+          const auto draw_start = std::chrono::steady_clock::now();
           video.draw_retained(
-              target.image, {uint32_t(state.width), uint32_t(state.height)},
+              target.image, forced_input ? *forced_input : VideoExtent{uint32_t(state.width), uint32_t(state.height)},
               {target.width, target.height}, image, settings, state.multiview?1:0, false);
+          wall_ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - draw_start).count());
+          if (const auto measured = video.gpu_ms())
+            gpu_ms.push_back(*measured);
           if (controls && !controls_done && video.presented() >= 12) {
             session.pause(true);
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -155,7 +174,16 @@ int main(int argc, char **argv) {
     std::sort(av_offset.begin(),av_offset.end());
     const auto low=av_offset.empty()?0:av_offset[av_offset.size()/20];
     const auto high=av_offset.empty()?0:av_offset[std::min(av_offset.size()-1,av_offset.size()*19/20)];
+    const auto percentile = [](std::vector<double> values, double share) {
+      if (values.empty())
+        return -1.;
+      std::sort(values.begin(), values.end());
+      return values[std::min(values.size() - 1, std::size_t(values.size() * share))];
+    };
     std::cout << "{\"presented_frames\":" << presented
+              << ",\"gpu_ms_p50\":" << percentile(gpu_ms, .5)
+              << ",\"gpu_ms_p95\":" << percentile(gpu_ms, .95)
+              << ",\"wall_ms_p50\":" << percentile(wall_ms, .5)
               << ",\"nonblack_pixels\":" << nonblack
               << ",\"decoder\":\"" << decoder_name << "\""
               << ",\"stereo\":" << (multiview?"true":"false")

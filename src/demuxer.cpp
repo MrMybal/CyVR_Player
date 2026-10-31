@@ -96,6 +96,19 @@ struct Demuxer::Impl {
 #endif
         }
     }
+    // FFmpeg keeps tls_verify off by default, and HLS rebuilds its options for
+    // every variant, segment and key without it. Each request must carry it.
+    int (*default_open)(AVFormatContext*,AVIOContext**,const char*,int,AVDictionary**)=nullptr;
+    static int open_verified(AVFormatContext* s,AVIOContext** pb,const char* url,int flags,AVDictionary** request){
+        auto& self=*static_cast<Impl*>(s->opaque);
+        AVDictionary* local=nullptr;
+        auto** settings=request?request:&local;
+        int result=av_dict_set(settings,"tls_verify","1",0);
+        if(result>=0 && !self.options.ca_file.empty())result=av_dict_set(settings,"ca_file",self.options.ca_file.c_str(),0);
+        if(result>=0)result=self.default_open(s,pb,url,flags,settings);
+        av_dict_free(&local);
+        return result;
+    }
     static int interrupt(void* opaque){
         auto& self=*static_cast<Impl*>(opaque);
         return (self.cancel && self.cancel->cancelled()) || (self.deadline && now_ns()>=self.deadline);
@@ -231,6 +244,9 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
     next->format=avformat_alloc_context();
     if(!next->format) throw std::bad_alloc();
     next->format->interrupt_callback={Impl::interrupt,next.get()};
+    next->format->opaque=next.get();
+    next->default_open=next->format->io_open;
+    next->format->io_open=Impl::open_verified;
     next->format->probesize=options.probe_bytes;
     next->format->max_analyze_duration=options.analyze_us;
     next->format->max_streams=256;
@@ -251,8 +267,15 @@ void Demuxer::open(const MediaSource& source,const StreamOptions& options,std::s
         // Nested HLS/DASH requests cannot escape into local files or devices.
         settings.set("protocol_whitelist","http,https,tcp,tls,rtp,udp,crypto,srt");
         settings.set("protocol_blacklist","file,subfile,concat,concatf,pipe,fd");
+        if(!options.http_headers.empty()) settings.set("headers",options.http_headers.c_str());
+        if(!options.user_agent.empty()) settings.set("user_agent",options.user_agent.c_str());
+        if(!options.http_cookies.empty()) settings.set("cookies",options.http_cookies.c_str());
     }
-    if(source.kind==SourceKind::descriptor) next->attach_fd(source);
+    if(source.kind==SourceKind::descriptor){
+        // A granted document holds no authority over other files or the network.
+        settings.set("protocol_whitelist","crypto,data");
+        next->attach_fd(source);
+    }
     next->arm(options.open_timeout_ms);
     const auto location_text=source.kind==SourceKind::file
         ? "file:"+std::filesystem::absolute(std::filesystem::u8path(source.location)).generic_u8string()
@@ -493,6 +516,13 @@ struct SoftwareDecoder::Impl {
     std::unique_ptr<MvcDecoder> mvc;
     StereoFrameAssembler views;
     bool multiview{};
+    int corruption{};
+    FramePtr spare_frame; // Polling usually finds no frame; keep its allocation.
+    // A damaged packet (scratched disc, lost UDP datagram) must not end playback,
+    // but a stream that mostly fails is undecodable, such as encrypted media
+    // without its keys. Random output can decode now and then, so measure the
+    // failure rate: each failure outweighs four good frames.
+    bool tolerate_corruption(){ corruption+=4; return corruption<=64; }
     ~Impl(){ avcodec_free_context(&codec); }
 };
 SoftwareDecoder::SoftwareDecoder(const Demuxer& demuxer,int stream,int threads,std::int64_t max_pixels,bool decode_views) : impl_(std::make_unique<Impl>()) {
@@ -523,21 +553,25 @@ bool SoftwareDecoder::send(const AVPacket* packet){
     if(impl_->mvc)return impl_->mvc->send(packet);
     const auto result=avcodec_send_packet(impl_->codec,packet);
     if(result==AVERROR(EAGAIN)) return false;
+    if(result==AVERROR_INVALIDDATA && impl_->tolerate_corruption()) return true;
     if(result<0) fail("Send decoder packet",result);
     return true;
 }
 FrameRead SoftwareDecoder::receive(){
     if(impl_->mvc)return impl_->mvc->receive();
     for(int attempt=0;attempt<16;++attempt){
-    FramePtr frame(av_frame_alloc());
+    FramePtr frame=std::move(impl_->spare_frame);
+    if(!frame)frame.reset(av_frame_alloc());
     if(!frame) throw std::bad_alloc();
     const auto result=avcodec_receive_frame(impl_->codec,frame.get());
-    if(result==AVERROR(EAGAIN)) return {DecodeStatus::again,{}};
+    if(result==AVERROR(EAGAIN)){impl_->spare_frame=std::move(frame);return {DecodeStatus::again,{}};}
     if(result==AVERROR_EOF) {
         if(!impl_->views.empty())throw MediaError("Multiview video ended with unmatched eyes");
         return {DecodeStatus::end,{}};
     }
+    if(result==AVERROR_INVALIDDATA && impl_->tolerate_corruption()) continue;
     if(result<0) fail("Receive decoded frame",result);
+    if(impl_->corruption>0)--impl_->corruption;
     if(impl_->multiview){frame=impl_->views.push(std::move(frame));if(!frame)continue;}
     return {DecodeStatus::frame,std::move(frame)};
     }

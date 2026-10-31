@@ -18,6 +18,6 @@ class AndroidBridge {
     jclass type_{};
     std::string root_, ca_, state_file_;
     jmethodID tree_{}, poll_{}, saved_{}, certs_{}, codec_{}, list_{}, open_{}, close_{}, cancel_{};
-    jmethodID locations_{},thumbnail_{};
+    jmethodID locations_{},thumbnail_{},browser_{},web_request_{};
 };
 } // namespace cyvr::player

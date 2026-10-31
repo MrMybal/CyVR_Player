@@ -33,6 +33,9 @@ def main():
         assert debug and debug[1] in ('false','0x0'), 'Alpha APK must not be debuggable'
         assert version in manifest and '-alpha.' in version
     activities=re.split(r'(?m)^            E: activity(?:-alias)? ',manifest)[1:]
+    browser=[activity for activity in activities if 'com.cyvr.player.BrowserActivity' in activity]
+    assert len(browser)==1 and ':browser' in browser[0],'The web browser must run in its own process'
+    activities=[activity for activity in activities if activity not in browser]
     assert len(activities)==(2 if args.panel_only else 3)
     assert 'com.cyvr.player.PanelActivity' in activities[0]
     for category in ('android.intent.category.LAUNCHER','com.oculus.intent.category.2D','com.oculus.intent.category.VR_HOME_LAUNCHER','com.oculus.intent.category.OVERLAY_LAUNCHER'):

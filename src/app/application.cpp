@@ -249,8 +249,8 @@ void PlayerApplication::tick() {
     state_dirty_ = true;
   }
   const bool was_ready=state_.ready;
-  auto state = session_.state();
-  if (state.revision != state_.revision) {
+  if (session_.revision() != state_.revision) {
+    auto state = session_.state();
     const bool formatChanged=state.ready && state.media_id==format_media_id_ && (state.video_track!=format_track_ || state.multiview!=state_.multiview);
     // Position changes alone are checkpointed every five seconds. Avoid
     // synchronous state-file writes twice a second on the rendering thread.
@@ -284,20 +284,24 @@ void PlayerApplication::tick() {
   const double now = std::chrono::duration<double>(
                          std::chrono::steady_clock::now().time_since_epoch())
                          .count();
-  std::vector<std::string> requests;
-  if (page_ == 0 && !suspended_) {
-    for (int row = 0; row < browser_page_size(); ++row) {
-      const auto n = offset_ + row;
-      requests.push_back(n < int(entries_.size()) && !entries_[n].directory &&
-                                 classify_extension(entries_[n].name) ==
-                                     FileKind::video
-                             ? entries_[n].location
-                             : "");
+  const auto preview_key = std::make_tuple(suspended_, offset_, browser_page_size(), browser_revision_);
+  if (page_ == 0 && (preview_key != preview_key_ || preview_requests_.empty())) {
+    preview_key_ = preview_key;
+    std::vector<std::string> requests;
+    if (!suspended_) {
+      for (int row = 0; row < browser_page_size(); ++row) {
+        const auto n = offset_ + row;
+        requests.push_back(n < int(entries_.size()) && !entries_[n].directory &&
+                                   classify_extension(entries_[n].name) ==
+                                       FileKind::video
+                               ? entries_[n].location
+                               : "");
+      }
     }
-  }
-  if (page_==0 && requests != preview_requests_) {
-    preview_requests_ = requests;
-    previews_->request(std::move(requests));
+    if (requests != preview_requests_) {
+      preview_requests_ = requests;
+      previews_->request(std::move(requests));
+    }
   }
   {
     std::unique_lock<std::mutex> lock(previews_->mutex, std::try_to_lock);
@@ -328,9 +332,14 @@ void PlayerApplication::tick() {
   const bool compact=immersive_video && controls_.mode()!=PlaybackControls::Mode::full;
   if(ui_.compactInterface!=compact){ui_.compactInterface=compact;ui_.invalidate();}
   if(immersive_video)ui_.setInterfaceHidden(controls_.mode()==PlaybackControls::Mode::hidden);
+  if (state_writer_.take_failure())
+    state_dirty_ = true;
   if ((state_dirty_ && now - last_save_ > .5) ||
       (state_.playing && now - last_save_ >= 5.)) {
-    save();
+    if (!platform_.state_file.empty()) {
+      state_writer_.post(platform_.state_file, snapshot());
+      state_dirty_ = false;
+    }
     last_save_ = now;
   }
 }
@@ -419,11 +428,13 @@ bool PlayerApplication::action(int id) {
   } else if (id == 1020) {
     resume_playing_ = !state_.playing;
     session_.pause(state_.playing);
-  } else if (id == 1021 || id == 1022)
+  } else if (id == 1021 || id == 1022) {
+    const auto media = session_.state();
     session_.seek(std::clamp<std::int64_t>(
-        state_.position_us + (id == 1021 ? -10000000 : 10000000), 0,
-        state_.duration_us > 0 ? state_.duration_us : INT64_MAX));
-  else if (id == 1023) {
+        (media.seeking ? media.seek_target_us : media.position_us) +
+            (id == 1021 ? -10000000 : 10000000),
+        0, media.duration_us > 0 ? media.duration_us : INT64_MAX));
+  } else if (id == 1023) {
     show_interface();
     source_.clear();
     title_.clear();
@@ -479,6 +490,7 @@ bool PlayerApplication::action(int id) {
   } else if (id == 1353) {
     image.sampling=0;image.denoise=0;image.detail=0;
     ++processing_request;
+  } else if(id==1354){smooth_video=!smooth_video;
   } else if(id==1681){scene.reset();cinema.elevation=cinema.pitch=cinema.roll=0;}
   else if(id==1682){scene.stable=!scene.stable;}
   else if(id==1683){scene.reset();cinema.elevation=cinema.pitch=cinema.roll=0;image.pan_x=image.pan_y=0;++video_placement_request;}
@@ -522,7 +534,10 @@ bool PlayerApplication::action(int id) {
     url_ = "https://";
   else if (id == 1253)
     symbols_ = !symbols_;
-  else if (id == 1255)
+  else if (id == 1256) {
+    if (platform_.open_browser)
+      platform_.open_browser(ui_.settings.language);
+  } else if (id == 1255)
     shift_ = !shift_;
   else if (id == 1254) {
     try {
@@ -557,7 +572,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.swap_eyes = swap_eyes;
   s.image = image;
   s.format_manual=format_manual_;
-  s.auto_format=auto_format_;
+  s.auto_format=auto_format_;s.smooth_video=smooth_video;
   s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
@@ -575,6 +590,7 @@ ApplicationState PlayerApplication::snapshot() const {
   return s;
 }
 void PlayerApplication::save() const {
+  state_writer_.drain();
   if (!platform_.state_file.empty() &&
       save_application_state(platform_.state_file, snapshot()))
     state_dirty_ = false;
@@ -590,7 +606,7 @@ bool PlayerApplication::restore(bool resume_media) {
   page_ = s.page;
   ui_.page = cyvr::Page(page_);
   offset_ = s.offset;
-  format_manual_=s.format_manual;auto_format_=s.auto_format;format_track_=-1;
+  format_manual_=s.format_manual;auto_format_=s.auto_format;format_track_=-1;smooth_video=s.smooth_video;
   stereo = s.stereo;
   projection = s.projection;
   half_stereo = s.half_stereo;
@@ -768,9 +784,13 @@ bool PlayerApplication::show_interface() {
   return hidden;
 }
 bool PlayerApplication::adjacent_video(int direction, bool play) {
-  const auto it=std::find_if(playlist_.begin(),playlist_.end(),[&](const auto& item){return item.location==source_;});
-  if(it==playlist_.end())return false;
-  const auto index=std::distance(playlist_.begin(),it)+direction;
+  // Drawing asks this every frame; folders can hold thousands of entries.
+  if(playlist_position_>=playlist_.size() || playlist_[playlist_position_].location!=source_){
+    const auto it=std::find_if(playlist_.begin(),playlist_.end(),[&](const auto& item){return item.location==source_;});
+    if(it==playlist_.end())return false;
+    playlist_position_=std::size_t(std::distance(playlist_.begin(),it));
+  }
+  const auto index=static_cast<std::ptrdiff_t>(playlist_position_)+direction;
   if(index<0 || index>=static_cast<std::ptrdiff_t>(playlist_.size()))return false;
   if(play){const auto item=playlist_[std::size_t(index)];open(item.location,item.name);}
   return true;

@@ -6,14 +6,7 @@ namespace cyvr::player {
 namespace {
 std::string fit(cyvr::DrawList &d, std::string_view value, float width,
                 float size = 24) {
-  std::string text(value);
-  while (!text.empty() && d.textWidth(size, text) > width) {
-    auto last = text.size() - 1;
-    while (last > 0 && (static_cast<unsigned char>(text[last]) & 0xc0) == 0x80)
-      --last;
-    text.resize(last);
-  }
-  return text;
+  return fit_text(d, value, width, size);
 }
 std::string clockText(std::int64_t us) {
   char out[40];
@@ -265,6 +258,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
     button(d, 1252, {474, 746, 150, 64}, "https://");
     button(d, 1253, {638, 746, 190, 64}, "Symbols", symbols_);
     button(d, 1255, {842, 746, 140, 64}, "Aa", shift_, !symbols_);
+    button(d, 1256, {996, 746, 408, 64}, "Web browser", false, bool(platform_.open_browser) && !immersive);
     button(d, 1254, {36, 838, 1368, 66}, "Open", true, !url_.empty());
   } else if(page_==4){draw_settings(d);
   } else {
@@ -353,6 +347,8 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       slider(1349, 718, "Fine detail", image.detail, 0, 1);
       button(d, 1353, {36, 784, 444, 52}, "Disable spatial filters");
       button(d, 1330, {498, 784, 340, 52}, "Reset image");
+      if(platform_.panorama)
+        button(d,1354,{856,784,548,52},smooth_video?"120 Hz for 60 fps video: On":"120 Hz for 60 fps video: Off",smooth_video);
       d.text(
           36, 855, 19,
           tr("Bicubic and noise reduction cost more GPU time; default: Off."),

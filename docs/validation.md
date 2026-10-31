@@ -1,4 +1,44 @@
-# Current validation — 0.4.10 (30 October 2026)
+# Current validation — 0.4.12-alpha.2 audit fixes (31 October 2026)
+
+- Windows: all eleven CTest suites pass, including 1,060 GPU image checks. Media, container, disc and compatibility integration suites pass. `media_integration.py` now covers 17 cases and defaults to the current build instead of a stale probe.
+- HLS TLS: a playlist served over HTTP with an HTTPS segment under an untrusted certificate is rejected. Removing the fix makes that same case succeed, so the test discriminates.
+- EASU/GSR shader work: pixel comparison against the previous shader differs in 2 of 131,072 bytes by 1/255 for FSR and in none for GSR. The GPU image suite does not detect a deliberately broken EASU footprint; that comparison was a one-off, and EASU still lacks an automated regression check. Measured on Quest 3, the footprint cache changes FSR GPU time by about 1.5% and GSR not at all, within run-to-run variation.
+- Cinema filter plans, measured with `cyvr_video_gpu_probe` on Quest 3 in one run, on a 1920x960 half-SBS clip: per-eye 2064x2208 costs 9.75 ms FSR, 3.66 ms GSR and 3.39 ms CAS for each eye; the screen plan 3168x960 costs 5.28 ms FSR, 1.91 ms GSR and 2.30 ms CAS per decoded frame. At 72 Hz with a 24 fps film that is about 1,400 ms of GPU time per second before (over budget) and 127 ms after for FSR, 527 and 46 ms for GSR, 488 and 55 ms for CAS. GPU clocks vary between runs, so only values from one run compare. These are probe figures on the filter passes, not a measured immersive session.
+- Quest 3: the Alpha APK is installed with a matching hash and launches. `quest_audio.py` passes its 13 cases across hardware and software decoding, with no underruns, gaps or xruns.
+- Decoder stall watchdog: neither a long pause nor a paused seek reproduced the stall on a small fixture, with or without the correction. It remains a preventive change.
+
+- Real immersive session on Quest 3, driven through the APK with Ambilight on and a 70 degree curved screen, using a 50 s 1920x960 24 fps clip: FSR, GSR and CAS each hold 72 submissions/s and 24 video frames/s with no errors and no late drops. Video GPU time per decoded frame is 7.1 ms FSR, 1.8 ms GSR, 1.7 ms CAS, and 9.5 ms for FSR on side-by-side (3856x968 output). Compositor captures confirm geometry, eye separation and the removal of the cut-off halo edge.
+- The shared pipeline cache reduces the first frame's import from 134 ms to under 1 ms from the second open onwards.
+- Tolerating corrupt packets first made encrypted media without keys decode noise in about half of `compat_integration.py` runs. The failure-rate rule replaced it: 0 failures in 12 runs.
+
+Not exercised on the headset: a flat cinema screen with filters, VR180/360, the worker with a real ASS file, a worn-headset judgement of sharpness and comfort, the outgoing-host deadlock, VIEW grants across host changes, the subtitle overflow input and the Gaussian barrier. The headset ran unworn, so these figures do not cover sustained thermals.
+
+## VR180 at 4K and 8K, 60 fps (31 October 2026)
+
+Quest 3, real immersive sessions at 72 Hz with HEVC side-by-side files, headset not worn, one 12-second run per mode. GPU share reported by the runtime:
+
+| Mode | 4096x2048 before | after | 7680x3840 before | after |
+| --- | --- | --- | --- | --- |
+| Native | 56% | 36% | 95%, 63-71 fps | 75%, 72 fps |
+| CAS | 81% | 85% | 78% | 86% |
+| FSR 1 | 91% | 87% | 95%, 64-72 fps | 84%, 72 fps |
+| GSR 1 | 70% | 61% | 82% | 84% |
+
+Filter rows after the change render 2100x2200 per eye instead of 1680x1760, and 4K filter rows use a saved zoom of 0.8. At 120 Hz, Native reaches 120 fps at 4K (48% GPU) and 116-121 fps at 8K (81% GPU).
+
+A later pass read every compositor line over 40-second runs instead of the last seconds of a short one, and found what the table above hides. In the panel window, 8K Native dropped to 35-39 fps and lost about 90 frames in 4 seconds, because the whole frame was converted for a small window. It now converts at twice the window size and holds 58-65 submissions per second with at most 2 late frames. In immersive, the frame loop blocked on the GPU fence for 9-12 ms of each 13.9 ms frame. The wait moved to the next image, so the frame loop now spends 0.5 ms with filters and 4.5 ms in Native. Late frames in immersive went from 10-215 per run to 0 in all seven runs, with no stale frame from the player once playback settled. Each mode still shows short stale bursts while immersive starts.
+
+- Not validated: head motion, since an unworn headset does not move. This covers the edge of the converted region during fast turns and pause redraws.
+- Not validated: filtered framing when worn. Without tracking, the per-eye fallback shows the picture shifted from Native, with black edges; the same happens at the recommended eye size. Check this in the headset.
+- Not validated: the pole branch of `visible_panorama`, which the unit test does not discriminate, sustained thermals, 120 Hz over long sessions, and subjective image quality.
+
+## Web browser (31 October 2026)
+
+- Windows: `media_integration.py` now covers 20 cases. A guarded video is refused without its page's settings, plays with `Referer` and scoped cookies, and refuses cookies scoped to another domain.
+- Quest 3: the Alpha APK opens the browser window from the player in a separate process, m.youtube.com loads, the domain filter counts blocked requests, and the player stays running behind it.
+- Not validated: real YouTube playback, **Play in CyVR** on the headset, controller and keyboard use, and fullscreen. Other tools were driving the headset, so scripted input stopped there. A throwaway probe confirmed direct video detection in the system WebView; it had no toolbar or hand-off.
+
+## 0.4.10 validation (30 October 2026)
 
 - Windows: ten CTest suites pass. New application checks cover opt-in detection, on/off toggling, disabled detection across late probing and new opens, Detect once without enabling, manual override priority, checkpoint/host restoration, old-state migration, VR180 slider/stick/button/trigger zoom limits, saved 0.25× zoom and normal limits after leaving VR180. Existing ISO integration tests still pass.
 - PC and Quest 3: **933 Vulkan image checks** pass, including **240 new VR180 zoom-out cases**. Independent CPU rays verify visible/transparent coverage at 0.25× and 0.5×, mono/SBS/TB eye isolation, horizontal positioning and a hidden rear hemisphere across Native/CAS/FSR/GSR. The English/French format controls were rendered and visually inspected.

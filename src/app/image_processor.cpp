@@ -42,6 +42,11 @@ struct ImageProcessor::Impl {
   static_assert(sizeof(Push) == 128);
   Impl(VulkanContext &g, VkFormat f, VideoExtent i, VideoExtent o)
       : gpu(g), format(f), input(i), output(o), timer(g) {}
+  // EASU only enlarges. A source at least as sharp as the view goes to RCAS.
+  bool reconstructs() const {
+    return configured_quality == 2 &&
+           (input.width != output.width || input.height != output.height);
+  }
   void image(Image &i, VideoExtent extent) {
     VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     info.imageType = VK_IMAGE_TYPE_2D;
@@ -71,7 +76,7 @@ struct ImageProcessor::Impl {
     vkCheck(vkCreateImageView(gpu.device, &view, nullptr, &i.view),
             "filter image view");
   }
-  void initialize(const AssetReader &assets, int quality) {
+  void initialize(const AssetReader &assets, int quality, VkPipelineCache cache) {
     configured_quality = quality;
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(gpu.physical, &properties);
@@ -83,7 +88,7 @@ struct ImageProcessor::Impl {
       throw std::runtime_error(
           "Display target exceeds this Vulkan device's image dimensions.");
     image(source, input);
-    if (quality == 2)
+    if (reconstructs())
       image(temp, output);
     VkAttachmentDescription a{};
     a.format = format;
@@ -218,12 +223,12 @@ struct ImageProcessor::Impl {
     VkSpecializationInfo specialize{1, &entry, sizeof(int), nullptr};
     for (int mode = 0; mode < 5; ++mode) {
       if (!((quality == 0 && mode == 0) || (quality == 1 && mode == 1) ||
-            (quality == 2 && (mode == 2 || mode == 3)) ||
+            (reconstructs() && mode == 2) || (quality == 2 && mode == 3) ||
             (quality == 3 && mode == 4)))
         continue;
       specialize.pData = &mode;
       stages[1].pSpecializationInfo = &specialize;
-      vkCheck(vkCreateGraphicsPipelines(gpu.device, VK_NULL_HANDLE, 1, &gp,
+      vkCheck(vkCreateGraphicsPipelines(gpu.device, cache, 1, &gp,
                                         nullptr, &pipelines[mode]),
               "filter pipeline");
     }
@@ -297,7 +302,8 @@ struct ImageProcessor::Impl {
     }
   }
   void record(VkCommandBuffer command, VkImage target,
-              const ImageSettings &settings, int stereo, bool sampled) {
+              const ImageSettings &settings, int stereo, bool sampled,
+              FilterRegion region = {}) {
     auto image = settings;
     image.sanitize();
     if (image.quality != configured_quality)
@@ -313,22 +319,23 @@ struct ImageProcessor::Impl {
     push.dimensions[2] = output.width;
     push.dimensions[3] = output.height;
     push.mode[0] = stereo;
+    push.mode[2] = int(region.x | region.y << 16);
+    push.mode[3] = int(region.radius_x | region.radius_y << 16);
     const Extent eyeIn{input.width / (stereo == 1 ? 2 : 1),
                        input.height / (stereo == 2 ? 2 : 1)},
         eyeOut{output.width / (stereo == 1 ? 2 : 1),
                output.height / (stereo == 2 ? 2 : 1)};
     int descriptor = 0;
     if (image.quality == 2) {
-      if (!temp.image)
-        throw std::runtime_error(
-            "FSR output extent must exceed the input extent");
-      const auto c = easu_constants(eyeIn, eyeOut);
-      std::memcpy(push.constants, &c, sizeof(c));
-      push.mode[1] = 2;
-      render(command, temp.image, output, 0, push, true);
-      descriptor = 1;
-      push.dimensions[0] = output.width;
-      push.dimensions[1] = output.height;
+      if (temp.image) {
+        const auto c = easu_constants(eyeIn, eyeOut);
+        std::memcpy(push.constants, &c, sizeof(c));
+        push.mode[1] = 2;
+        render(command, temp.image, output, 0, push, true);
+        descriptor = 1;
+        push.dimensions[0] = output.width;
+        push.dimensions[1] = output.height;
+      }
       const auto r = rcas_constants((1 - image.sharpness) * 2);
       std::memcpy(push.constants, &r, sizeof(r));
       push.mode[1] = 3;
@@ -410,9 +417,10 @@ struct ImageProcessor::Impl {
 };
 ImageProcessor::ImageProcessor(VulkanContext &gpu, VkFormat f,
                                const AssetReader &assets, VideoExtent in,
-                               VideoExtent out, int quality)
+                               VideoExtent out, int quality,
+                               VkPipelineCache cache)
     : impl_(std::make_unique<Impl>(gpu, f, in, out)) {
-  impl_->initialize(assets, quality);
+  impl_->initialize(assets, quality, cache);
 }
 ImageProcessor::~ImageProcessor() = default;
 VkImage ImageProcessor::source_image() const { return impl_->source.image; }
@@ -426,8 +434,8 @@ void ImageProcessor::process(VkImage output, const ImageSettings &image,
 namespace cyvr::player {
 void ImageProcessor::record(VkCommandBuffer command, VkImage target,
                             const ImageSettings &image, int stereo,
-                            bool sampled) {
-  impl_->record(command, target, image, stereo, sampled);
+                            bool sampled, FilterRegion region) {
+  impl_->record(command, target, image, stereo, sampled, region);
 }
 std::optional<double> ImageProcessor::gpu_ms() const {
   return impl_->last_gpu_ms;
