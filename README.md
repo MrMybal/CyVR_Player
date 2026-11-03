@@ -8,6 +8,24 @@ A native C++17 / Vulkan video player for Meta Quest, using the local [CyVR_UI fo
 
 The app opens in a **real Android 2D window**, without creating an OpenXR instance or session. Horizon OS owns moving, resizing and closing the window, including multitasking. **Enter immersive** explicitly opens the optional VR host for cinema, stereoscopic and panoramic playback. **Return to 2D** or Android Back restores the panel. Both hosts use the same C++ interface, themes, English/French translations, browser and player model. The current integration uses **CyVR_UI 0.8.0**, with static GPU scene buffers and its original PBR materials/offline lighting. These scene resources are excluded from strictly 2D builds.
 
+## Screenshots
+
+The shared C++/Vulkan interface, captured with the desktop inspector using demo media and folders. Click a screenshot to view it at full size.
+
+| Library and video previews | Playback and timeline |
+| :---: | :---: |
+| [![Library in tile view with folders and video previews](docs/images/library.png)](docs/images/library.png) | [![Playback page with video preview, timeline, transport and volume controls](docs/images/playback.png)](docs/images/playback.png) |
+| **Real-time image quality** | **Immersive cinema settings** |
+| [![Native, CAS, FSR and GSR options with image smoothing, noise reduction and detail controls](docs/images/image-quality.png)](docs/images/image-quality.png) | [![Cinema screen width, viewing distance, curvature, height, tilt and roll controls](docs/images/cinema.png)](docs/images/cinema.png) |
+| **Subtitle appearance** | **Interface window settings** |
+| [![Subtitle text size, opacity, outline, shadow, color and style settings](docs/images/subtitles.png)](docs/images/subtitles.png) | [![Immersive window resizing, facing, hover icons and placement settings](docs/images/window-controls.png)](docs/images/window-controls.png) |
+
+The compact immersive playback bar, shown on its own:
+
+[![Compact immersive toolbar with drag handle, seek bar, playback controls and shortcuts](docs/images/compact-controls.png)](docs/images/compact-controls.png)
+
+Capture details and demo image credits: [screenshots](docs/images/README.md).
+
 ## Build
 
 The branding resource step requires Pillow (`python -m pip install Pillow`) at build time. The runtime remains native C++/Vulkan.
