@@ -14,7 +14,7 @@ struct PlayerApplication::PreviewWorker {
   std::map<std::string, unsigned> failures;
   std::vector<std::string> lru;
   std::vector<std::uint8_t> atlas;
-  std::array<bool, 7> present{};
+  std::array<bool, preview_slots> present{};
   std::uint64_t revision{}, generation{};
   bool pending{}, quit{}, reset_failures{},invalidate_cache{};
   std::shared_ptr<Cancellation> cancellation = std::make_shared<Cancellation>();

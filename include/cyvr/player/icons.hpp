@@ -130,13 +130,11 @@ inline void draw_icon(cyvr::DrawList &d, Icon icon, cyvr::Vec2 center,
     d.circle(p(12, 7), 1.1f * s, c);
     break;
   case Icon::Settings:
-    for (int i = 0; i < 8; ++i) {
-      float a = i * cyvr::pi / 4;
-      line(12 + 8 * std::cos(a), 12 + 8 * std::sin(a), 12 + 11 * std::cos(a),
-           12 + 11 * std::sin(a));
+    for (int i = 0; i < 64; ++i) {
+      auto tooth=[&](int k){float a=k*cyvr::pi/32;float r=(k%8==1 || k%8==2 || k%8==3 || k%8==4)?10.5f:8.f;return p(12+r*std::cos(a),12+r*std::sin(a));};
+      d.line(tooth(i),tooth((i+1)%64),c,1.8f*s);
     }
-    d.ring(center, 7.5f * s, 1.8f * s, c);
-    d.ring(center, 2.6f * s, 1.8f * s, c);
+    d.ring(center, 3.1f * s, 1.8f * s, c);
     break;
   case Icon::Headset:
     box(2, 6, 20, 12);

@@ -28,6 +28,13 @@ int main(int argc,char** argv){
         const auto active=timeline.at(600000);if(active.cues.empty())throw std::runtime_error("Embedded subtitle timing lost");
         auto image=renderer.render(active,1920,1080);
         if(!image || image->rgba.empty() || std::none_of(image->rgba.begin()+3,image->rgba.end(),[](auto b){return b!=0;}))throw std::runtime_error("Embedded subtitle did not rasterize");
+        if(track.codec=="subrip"){
+          SubtitleSettings style;style.custom=true;style.color=1;style.bold=true;style.scale=1.4f;style.opacity=.5f;style.y=-.1f;
+          auto styled=renderer.render(active,1920,1080,style);if(!styled || styled->rgba.empty())throw std::runtime_error("Custom subtitles failed to render");
+          bool yellow=false;for(std::size_t n=0;n<styled->rgba.size();n+=4){if(styled->rgba[n+3]>128)throw std::runtime_error("Subtitle opacity ignored");if(styled->rgba[n+3]>20 && styled->rgba[n]>180 && styled->rgba[n+1]>150 && styled->rgba[n+2]<150)yellow=true;}
+          if(!yellow || styled->width<=image->width || styled->y>=image->y)throw std::runtime_error("Subtitle color, size or placement ignored");
+          if(renderer.render(active,1920,1080,style))throw std::runtime_error("Unchanged styled subtitle must stay cached");
+        }
         auto clear=renderer.render(timeline.at(1150000),1920,1080);if(!clear || !clear->rgba.empty())throw std::runtime_error("Subtitle did not clear in the gap");
         auto next=renderer.render(timeline.at(1500000),1920,1080);if(!next || next->rgba.empty())throw std::runtime_error("Second subtitle missing");
         auto seek=renderer.render(timeline.at(600000),1920,1080);if(!seek || seek->rgba.empty())throw std::runtime_error("Subtitle rewind failed");
@@ -51,6 +58,9 @@ int main(int argc,char** argv){
       SubtitleRasterizer renderer(read("subtitle-font.ttf"));auto image=renderer.render(snapshot,320,180);
       if(!image || image->width!=2 || image->height!=2 || image->rgba[3]!=255 || image->rgba[0]<240)throw std::runtime_error("PGS palette, geometry or alpha lost");
       if(renderer.render(timeline.at(700000),320,180))throw std::runtime_error("Static PGS subtitle triggered a redundant GPU upload");
+      SubtitleSettings placement;placement.x=.1f;placement.y=-.1f;placement.opacity=.5f;
+      auto moved=renderer.render(snapshot,320,180,placement);
+      if(!moved || moved->x!=image->x+32 || moved->y!=image->y-18 || moved->rgba[3]!=128 || moved->rgba[0]!=image->rgba[0])throw std::runtime_error("Bitmap subtitle placement, opacity or palette changed incorrectly");
       auto cleared=renderer.render(timeline.at(1150000),320,180);if(!cleared || !cleared->rgba.empty())throw std::runtime_error("PGS overlay did not clear");
       if(!timeline.at(1150000).cues.empty())throw std::runtime_error("PGS display clear failed");
     }

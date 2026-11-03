@@ -149,13 +149,26 @@ void PlayerApplication::PreviewWorker::request(std::vector<std::string> paths,
                                                bool refresh) {
   std::lock_guard<std::mutex> lock(mutex);
   cancellation->cancel();
+  // Keep visible images when scrolling exposes another row. The decoder cache
+  // belongs to the worker; this remap only reads the published atlas under lock.
+  std::vector<std::uint8_t> retained(thumb_w*thumb_h*preview_slots*4,0);
+  std::array<bool,preview_slots> retained_present{};
+  if(!refresh)for(size_t row=0;row<paths.size() && row<preview_slots;++row){
+    if(paths[row].empty())continue;
+    for(size_t old=0;old<requests.size() && old<preview_slots;++old)
+      if(present[old] && requests[old]==paths[row]){
+        const size_t bytes=thumb_w*thumb_h*4;
+        std::copy_n(atlas.begin()+old*bytes,bytes,retained.begin()+row*bytes);
+        retained_present[row]=true;break;
+      }
+  }
   requests = std::move(paths);
   pending = true;
   reset_failures = true;
   invalidate_cache = invalidate_cache || refresh;
   ++generation;
-  atlas.assign(thumb_w * thumb_h * 7 * 4, 0);
-  present.fill(false);
+  atlas=std::move(retained);
+  present=retained_present;
   ++revision;
   wake.notify_one();
 }
@@ -184,7 +197,7 @@ void PlayerApplication::PreviewWorker::run() {
       cancellation = cancel = std::make_shared<Cancellation>();
     }
     for (std::size_t row = 0;
-         row < paths.size() && row < 7 && !cancel->cancelled(); ++row) {
+         row < paths.size() && row < preview_slots && !cancel->cancelled(); ++row) {
       const auto &path = paths[row];
       if (path.empty())
         continue;

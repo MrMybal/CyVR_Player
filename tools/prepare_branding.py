@@ -12,7 +12,7 @@ def prepare(output):
     output.mkdir(parents=True, exist_ok=True)
     with Image.open(MASTER) as source:
         logo = source.convert('RGBA')
-    # Shared UI atlas: seven 160x90 previews, a ten-pixel gap, then this logo.
+    # Shared UI atlas: nine 160x90 previews, a ten-pixel gap, then this logo.
     (output / 'player-logo.rgba').write_bytes(logo.resize((160, 160), Image.Resampling.LANCZOS).tobytes())
     resources = output / 'res'
     for density, size in [('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)]:

@@ -19,8 +19,9 @@ def git(root, *arguments):
 def main():
     subprocess.run(['git', '-c', 'safe.directory=' + ROOT.as_posix(), '-C', str(ROOT), 'diff', '--exit-code'], check=True)
     version = ET.parse(ROOT / 'android/AndroidManifest.xml').getroot().get('{http://schemas.android.com/apk/res/android}versionName')
-    if not version or '-alpha.' not in version:
-        raise RuntimeError('An Alpha version is required')
+    if not version or not any(marker in version for marker in ('-alpha.','-beta.')):
+        raise RuntimeError('An Alpha or Beta version is required')
+    channel='beta' if '-beta.' in version else 'alpha'
     output = ROOT / 'dist/releases' / version
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f'CyVR_Player-{version}-sources.zip'
@@ -31,7 +32,7 @@ def main():
             path = raw_path.decode('utf-8')
             files['CyVR_Player/' + path] = git(ROOT, 'show', ':' + path)
     foundation=foundation_sources(UI)
-    compiled=json.loads((ROOT/'build/app-android-alpha/foundation-inputs.json').read_text(encoding='utf-8'))
+    compiled=json.loads((ROOT/('build/app-android-'+channel)/'foundation-inputs.json').read_text(encoding='utf-8'))
     if foundation!=compiled:
         raise RuntimeError('The foundation source differs from the compiled APK; rebuild before packaging')
     ui_paths=set(foundation['files'])
@@ -67,7 +68,7 @@ def main():
         'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
     }
     files['source-manifest.json'] = (json.dumps(metadata, indent=2) + '\n').encode()
-    files['SOURCE_BUILD.md'] = BUILD_INSTRUCTIONS.encode()
+    files['SOURCE_BUILD.md'] = BUILD_INSTRUCTIONS.replace('@CHANNEL@',channel).encode()
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as package:
         for name, data in sorted(files.items()):
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
@@ -77,10 +78,10 @@ def main():
     print(json.dumps({'archive': archive.name, 'files': len(files), 'player_tree': player_tree, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}))
 
 
-BUILD_INSTRUCTIONS = '''# Rebuilding the Alpha
+BUILD_INSTRUCTIONS = '''# Rebuilding the prerelease
 
 Keep `CyVR_Player` and `CyVR_UI` as sibling directories. The foundation is the
-actual source snapshot used for this Alpha, including its local media-host
+actual source snapshot used for this build, including its media-host
 extensions, under MIT. Its reference documentation illustrations are omitted;
 all build inputs are included. Player code is GPL-3.0-only.
 
@@ -119,8 +120,8 @@ Build tools and the Android platform/runtime are installed separately.
    The original private key is not distributed. A differently signed rebuild
    cannot update the published APK in place; uninstalling removes app data, so
    use a separate test device/package or preserve data before changing signing.
-6. Run `python tools/build_app.py --target android --alpha`, then
-   `python tools/verify_app.py --alpha`. It builds the default 2D launcher with
+6. Run `python tools/build_app.py --target android --@CHANNEL@`, then
+   `python tools/verify_app.py --@CHANNEL@`. It builds the default 2D launcher with
    optional immersion, packages stripped native libraries, disables Android
    debugging and signs the testing APK. Override CYVR_UI_ROOT if needed.
 

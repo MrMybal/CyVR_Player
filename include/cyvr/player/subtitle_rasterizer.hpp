@@ -1,5 +1,6 @@
 #pragma once
 #include "cyvr/player/subtitles.hpp"
+#include "cyvr/player/subtitle_settings.hpp"
 #include <optional>
 namespace cyvr::player {
 struct SubtitleImage {
@@ -12,7 +13,7 @@ class SubtitleRasterizer {
 public:
     explicit SubtitleRasterizer(std::vector<std::uint8_t> default_font);
     ~SubtitleRasterizer();
-    std::optional<SubtitleImage> render(const SubtitleSnapshot&,int width,int height);
+    std::optional<SubtitleImage> render(const SubtitleSnapshot&,int width,int height,const SubtitleSettings& = {});
 private:
     struct Impl;std::unique_ptr<Impl> impl_;
 };
@@ -22,7 +23,7 @@ class SubtitleWorker {
 public:
     explicit SubtitleWorker(std::vector<std::uint8_t> default_font);
     ~SubtitleWorker();
-    void post(SubtitleSnapshot,int width,int height);
+    void post(SubtitleSnapshot,int width,int height,const SubtitleSettings& = {});
     std::optional<SubtitleImage> take();
 private:
     struct Impl;std::unique_ptr<Impl> impl_;

@@ -1,3 +1,14 @@
+# Current validation — 0.4.15-beta.1 (3 November 2026)
+
+The Beta adds the latest continuous file browser, subtitle preferences, compact/full interface behavior, independent movie manipulation and CyVR_UI 0.9.1 window interactions. Its build scripts support an explicit `--beta` profile and source packaging through `tools/package_release.py`.
+
+- Windows: all 14 CTest suites pass on the current player and foundation sources. This includes application state migration, window resizing/ownership, layout and rendering, independent video placement, Gaussian rendering and the GPU image filters.
+- Android: the default ARM64 Beta compiles as Release, retains the update signing identity, disables debugging and passes the manifest, native libraries, notices and 16 KiB ELF/ZIP alignment checks.
+- Quest 3: update installation and a cold 2D launch pass. The installed APK hash and version match the new Beta artifact. Synthetic native window interactions, 183 independent movie-placement checks and the continuous file browser/preview probe pass using demonstration data.
+- Remaining: real controller/hand feel and window manipulation, binocular appearance, audiovisual synchronization, demanding files and sustained thermal performance need a worn-headset check. Portable/synthetic checks do not establish those results.
+
+Earlier validation follows as release history.
+
 # Current validation — 0.4.12-alpha.2 audit fixes (31 October 2026)
 
 - Windows: all eleven CTest suites pass, including 1,060 GPU image checks. Media, container, disc and compatibility integration suites pass. `media_integration.py` now covers 17 cases and defaults to the current build instead of a stale probe.

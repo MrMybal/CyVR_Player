@@ -54,9 +54,13 @@ void playback_controls_tests() {
     controls.update(true,22.9,false);
     require(controls.mode()==Mode::full,"A held slider must defer automatic hiding");
     controls.update(true,23,false);
-    require(controls.mode()==Mode::hidden,"Full controls must also auto-hide when interaction ends");
+    require(controls.mode()==Mode::full,"Full controls must remain visible while making adjustments");
+    controls.update(true,3600,false);require(controls.mode()==Mode::full,"Full settings must never time out");
+    controls.compact(3601);controls.update(true,3604,false);require(controls.mode()==Mode::hidden,"Only compact controls may time out");
     controls.update(false,30,false);
     require(controls.mode()==Mode::full,"Errors and stopping playback must restore the library");
+    controls.expand(31);controls.update(false,32,false);controls.update(true,33,false);controls.update(true,100,false);
+    require(controls.mode()==Mode::full,"An interface opened while loading must stay full when decoding becomes ready");
   }
 }
 void screen_plan_tests() {

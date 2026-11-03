@@ -3,6 +3,7 @@
 #include "cyvr/player/locale.hpp"
 #include "cyvr/player/media.hpp"
 #include "cyvr/player/video_placement.hpp"
+#include "cyvr/player/video_interaction.hpp"
 #include "cyvr/player/subtitle_rasterizer.hpp"
 #include "cyvr/player/ambilight.hpp"
 #include "cyvr/player/splat_renderer.hpp"
@@ -83,6 +84,9 @@ class Renderer final : public Base {
 #if CYVR_ENABLE_IMMERSIVE
   AndroidXrContext xr_{};
   VideoPlacement video_placement_;
+  std::array<VideoGrab,2> video_grab_;
+  int grab_hand_{-1};
+  std::uint64_t grab_media_id_{};
   XrSpace video_space_{},stable_space_{};
   std::uint64_t placed_request_{UINT64_MAX};
   struct SpaceChange {
@@ -215,6 +219,8 @@ public:
       return;
     }
 #if CYVR_ENABLE_IMMERSIVE
+    if(auto app=application_())app->video_manipulation={};
+    cancel_grabs();
     if(stable_space_){xrDestroySpace(stable_space_);stable_space_=XR_NULL_HANDLE;}
 #endif
     if (!gpu_)
@@ -523,6 +529,7 @@ public:
   std::vector<const char*> optionalInstanceExtensions()const override{return {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME,XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME};}
   void xrReady(const AndroidXrContext &context) override {
     xr_ = context;
+    if(auto app=application_())app->video_manipulation=[this](const ControllerInput& input,bool allowed){return manipulate_video(input,allowed);};
     // Video work waits for the GPU on the frame loop. The default governor lowers
     // the clock as soon as a frame gets cheaper, which turns the gain into late frames.
     if(std::find(context.enabledApplicationExtensions.begin(),context.enabledApplicationExtensions.end(),std::string_view(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))!=context.enabledApplicationExtensions.end()){
@@ -564,6 +571,7 @@ public:
   }
   void referenceSpaceChanging(
       const XrEventDataReferenceSpaceChangePending &change) override {
+    cancel_grabs(); // A held pose must not bridge two tracking origins.
     if (video_placement_.placed() &&
         ((change.referenceSpaceType==XR_REFERENCE_SPACE_TYPE_LOCAL && video_space_==xr_.local) ||
          (change.referenceSpaceType==XR_REFERENCE_SPACE_TYPE_STAGE && video_space_==stable_space_)))
@@ -590,21 +598,23 @@ public:
       }
     }else if(!app || !app->ambilight.enabled){ambilight_active_=false;ambilight_failed_epoch_=UINT64_MAX;}
     if(app && caption_visible_ && caption_swapchain_ && count<capacity && video_placement_.placed()){
-      auto pose=video_placement_.screen(app->image,app->projection?CinemaSettings{}:app->cinema,app->scene);
-      if(app->projection)pose=video_placement_.screen(ImageSettings{},CinemaSettings{},app->scene.rotation_only());
+      auto caption_cinema=app->projection?CinemaSettings{}:app->cinema;
+      const float depth_scale=app->subtitle_settings.follow_depth?1.f:app->subtitle_settings.distance/caption_cinema.distance;
+      caption_cinema.distance*=depth_scale;caption_cinema.width*=depth_scale;
+      auto pose=video_placement_.screen(app->projection?ImageSettings{}:app->image,caption_cinema,app->projection?app->scene.rotation_only():app->scene);
       pose.position=pose.position+rotate(pose.orientation,{0,0,.01f});
       auto& q=caption_quad_;q={XR_TYPE_COMPOSITION_LAYER_QUAD};q.space=video_space_;
       q.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
       q.eyeVisibility=XR_EYE_VISIBILITY_BOTH;q.subImage.swapchain=caption_swapchain_;
       q.subImage.imageRect={{0,0},{caption_width_,caption_height_}};
       q.pose={{pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w},{pose.position.x,pose.position.y,pose.position.z}};
-      const auto w=app->projection?4.f:app->cinema.width*app->image.zoom;
+      const auto w=caption_cinema.width*(app->projection?1.f:app->image.zoom);
       q.size={w,w*float(caption_height_)/caption_width_};
       if(!app->projection && app->cinema.curvature>0 && cylinder_enabled_){
         auto& cylinder=caption_cylinder_;cylinder={XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
         cylinder.space=q.space;cylinder.layerFlags=q.layerFlags;cylinder.eyeVisibility=q.eyeVisibility;cylinder.subImage=q.subImage;
-        const auto radius=app->cinema.radius(app->image.zoom);
-        const auto middle=video_placement_.screen(app->image,app->cinema,app->scene);
+        const auto radius=caption_cinema.radius(app->image.zoom);
+        const auto middle=video_placement_.screen(app->image,caption_cinema,app->scene);
         const auto center=cylinder_center(middle,radius);
         cylinder.pose={{center.orientation.x,center.orientation.y,center.orientation.z,center.orientation.w},{center.position.x,center.position.y,center.position.z}};
         cylinder.radius=std::max(.01f,radius-.01f);cylinder.centralAngle=app->cinema.angle();cylinder.aspectRatio=float(caption_width_)/caption_height_;
@@ -723,6 +733,55 @@ public:
 #endif
 private:
 #if CYVR_ENABLE_IMMERSIVE
+  void cancel_grabs(){for(auto& grab:video_grab_)grab.cancel();grab_hand_=-1;}
+  bool manipulate_video(const ControllerInput& input,bool allowed){
+    if(input.hand>=2)return false;
+    auto& grab=video_grab_[input.hand];const bool was_grabbing=grab.active();
+    const bool down=input.trigger>(was_grabbing?.35f:.55f);
+    if(!input.poseValid || input.grip>=.65f){grab.cancel();if(grab_hand_==int(input.hand))grab_hand_=-1;return was_grabbing;}
+    if(!down && std::abs(input.stick.x)<=.22f){grab.update({},true,false,false,{});if(grab_hand_==int(input.hand))grab_hand_=-1;return was_grabbing;}
+    if(!allowed && !was_grabbing){grab.update({},true,down,false,{});return false;}
+    if(grab_hand_>=0 && grab_hand_!=int(input.hand))return false;
+    auto app=application_();if(!app)return false;
+    const auto media=app->session().state();
+    if(grab_media_id_!=media.media_id){
+      const bool fresh=!grab.held();cancel_grabs();grab_media_id_=media.media_id;
+      if(down && !fresh)return was_grabbing;
+      grab.update({},true,false,false,{});
+    }
+    const PanelGeometry unused;
+    if(!place_video({input.timeNs,xr_.local,unused},*app))return false;
+    constexpr auto valid=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    XrSpaceLocation local{XR_TYPE_SPACE_LOCATION},head{XR_TYPE_SPACE_LOCATION};
+    if(XR_FAILED(xrLocateSpace(xr_.local,video_space_,input.timeNs,&local)) || (local.locationFlags&valid)!=valid ||
+       XR_FAILED(xrLocateSpace(xr_.view,video_space_,input.timeNs,&head)) || (head.locationFlags&valid)!=valid){cancel_grabs();return was_grabbing;}
+    const auto hand=compose_pose(pose_from_xr(local.pose),input.pose);
+    const auto cinema=app->projection?CinemaSettings{}:app->cinema;
+    const auto screen=video_placement_.screen(app->image,cinema,app->scene);
+    bool target=allowed;
+    if(!was_grabbing && down && !app->projection && !media.volumetric){
+      const double par=app->half_stereo && app->stereo?(app->stereo==1?2.:.5):media.pixel_aspect;
+      const float width=cinema.width*app->image.zoom;
+      const float height=width/float(eye_aspect(media.width,media.height,StereoLayout(app->stereo),par));
+      target=target && hits_cinema(hand,screen,width,height,cinema.radius(app->image.zoom));
+    }else if(!was_grabbing && down && app->projection==1){
+      const auto ray=rotate(multiply_rotation(inverse_rotation(screen.orientation),hand.orientation),{0,0,-1});
+      target=target && std::abs(std::atan2(ray.x,-ray.z))<=pi*.5f*std::min(1.f,app->image.zoom);
+    }
+    if(auto moved=grab.update(hand,true,down,target,screen)){
+      if(app->projection)moved->position=screen.position;
+      app->scene=video_placement_.scene_for(*moved,app->image,cinema,app->scene);
+      grab_hand_=int(input.hand);return true;
+    }
+    if(was_grabbing){grab_hand_=-1;return true;}
+    if(allowed && !down && std::abs(input.stick.x)>.22f){
+      const float strength=std::clamp((std::abs(input.stick.x)-.22f)/.78f,0.f,1.f);
+      const float dt=std::isfinite(input.deltaSeconds)?std::clamp(input.deltaSeconds,0.f,.05f):0;
+      const auto turned=rotate_video_view(screen,pose_from_xr(head.pose),std::copysign(pi/3*strength*dt,input.stick.x),app->projection!=0);
+      app->scene=video_placement_.scene_for(turned,app->image,cinema,app->scene);return true;
+    }
+    return false;
+  }
   void destroy_ambilight(){
     ambilight_capture_.reset();ambilight_.reset();
     if(ambilight_swapchain_)xrDestroySwapchain(ambilight_swapchain_);
@@ -874,7 +933,7 @@ private:
       const double par=app.half_stereo && app.stereo?(app.stereo==1?2.:.5):state.pixel_aspect;
       const double aspect=app.projection?16./9:eye_aspect(state.width,state.height,StereoLayout(app.stereo),par);
       int height=std::clamp(int(std::lround(width/std::max(.25,aspect))),256,4096);
-      captions_->post(snapshot,width,height);
+      captions_->post(snapshot,width,height,app.subtitle_settings);
       auto image=captions_->take();
       if(!image)return;
       width=image->canvas_width;height=image->canvas_height;
@@ -988,7 +1047,7 @@ private:
       const auto change = space_changes_.front();
       space_changes_.pop_front();
       if(app.scene.stable && change.space==video_space_){
-        if(change.valid)video_placement_.transform(inverse_pose(change.new_in_previous));
+        if(change.valid){cancel_grabs();video_placement_.transform(inverse_pose(change.new_in_previous));}
         else last_ui().setToast(std::string(player_translate(last_ui().settings.language,"Tracking origin changed; adjust video placement if needed.")));
       }
     }
@@ -1002,6 +1061,7 @@ private:
                                      &location)) &&
           (location.locationFlags & valid) == valid) {
         video_placement_.transform(pose_from_xr(location.pose));
+        cancel_grabs();
         video_space_ = preferred;
       }
     }
@@ -1016,6 +1076,7 @@ private:
           return video_placement_.placed();
         head = pose_from_xr(location.pose);
       }
+      if(video_placement_.placed())cancel_grabs();
       video_placement_.place(head, last_ui().settings.distance,app.video_placement_request!=0);
       video_space_ = preferred;
       placed_request_ = app.video_placement_request;

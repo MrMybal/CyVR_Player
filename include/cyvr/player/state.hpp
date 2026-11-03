@@ -4,6 +4,7 @@
 #include "cyvr/player/ambilight.hpp"
 #include "cyvr/player/track_selection.hpp"
 #include "cyvr/player/scene_settings.hpp"
+#include "cyvr/player/subtitle_settings.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -24,12 +25,17 @@ struct ApplicationState {
   bool format_manual{true}; // Legacy checkpoints preserve their selected format.
   bool auto_format{}; // Opt in; retain manual formats when upgrading old state.
   bool smooth_video{}; // Opt in; see wants_double_rate.
+  SubtitleSettings subtitle_settings;
+  bool subtitle_settings_open{};
+  int subtitle_settings_tab{};
   TrackSelection tracks;
   bool tracks_open{};int track_tab{},track_offset{};
   SceneSettings scene;
   int browser_view{};
+  float browser_scroll{-1}; // Legacy checkpoints restore their first item.
   std::vector<FolderBookmark> favorites;
   float volume{1};
+  bool window_resizable{true}, window_face_viewer{true}, window_settings_open{};
 };
 std::optional<ApplicationState>
 load_application_state(const std::string &path) noexcept;

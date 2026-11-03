@@ -150,9 +150,13 @@ public:
   std::uint64_t video_placement_request{};
   CinemaSettings cinema;
   SceneSettings scene;
+  // Renderer-owned spatial operations; all callbacks run on the host thread.
+  std::function<bool(const cyvr::ControllerInput&,bool target_allowed)> video_manipulation;
+  void placement_changed();
   float volume{1};
   bool smooth_video{};
   AmbilightSettings ambilight;
+  SubtitleSettings subtitle_settings;
   RenderMonitor render_monitor;
   PlayerSession &session() { return session_; }
   int stereo{};     // mono, SBS, top/bottom
@@ -161,7 +165,7 @@ public:
   ImageSettings image;
   void video_input(float seek, float zoom, float pan_x = 0, float pan_y = 0);
   void set_logo(const std::vector<std::uint8_t>& rgba);
-  // Shared UI atlas: visible-page thumbnails and a static branding tile.
+  // Shared UI atlas: visible thumbnails and a static branding tile.
   bool take_thumbnails(std::vector<std::uint8_t> &rgba, bool force = false);
   const std::string &location() const { return directory_; }
 
@@ -176,7 +180,7 @@ private:
   std::vector<std::string> preview_requests_;
   std::tuple<bool, int, int, std::uint64_t> preview_key_{};
   std::size_t playlist_position_{};
-  std::array<bool, 7> preview_present_{};
+  std::array<bool, preview_slots> preview_present_{};
   std::vector<std::uint8_t> thumbnail_atlas_;
   std::uint64_t preview_revision_{};
   bool thumbnail_dirty_{};
@@ -190,19 +194,30 @@ private:
   int cinema_tab_{};
   bool format_manual_{};
   bool auto_format_{};
-  int browser_view_{},sidebar_tab_{},sidebar_offset_{};
+  int browser_view_{1},sidebar_tab_{},sidebar_offset_{};
+  float browser_scroll_{};
+  cyvr::DrawList browser_draw_;
+  bool browser_drag_[2]{}, browser_pointer_down_[2]{};
+  float browser_grab_[2]{};
   std::vector<FolderBookmark> favorites_;
   std::vector<BrowserItem> locations_;
   float unmuted_volume_{1};
   std::string icon_hint_;
   std::string folder_name_;
-  int browser_page_size()const{return browser_view_?6:7;}
+  int browser_columns() const { return browser_view_ ? 3 : 1; }
+  float browser_row_height() const { return browser_view_ ? 259.f : 72.f; }
+  int browser_visible_count() const;
+  float browser_scroll_limit() const;
+  void set_browser_scroll(float);
+  bool browser_pointer(size_t, cyvr::Vec2, bool);
+  bool scroll_library(cyvr::Vec2,float);
   void refresh_locations();
   void toggle_favorite();
   void draw_library(cyvr::DrawList&);
   void draw_settings(cyvr::DrawList&);
+  bool window_settings_open_{};
+  void draw_window_settings(cyvr::DrawList&);
   void draw_placement(cyvr::DrawList&);
-  bool draw_dock(cyvr::DrawList&);
   std::uint64_t format_media_id_{};
   int format_track_{-1};
   DetectedVideoLayout detected_layout_;
@@ -211,16 +226,15 @@ private:
 public:
   const std::string &state_file() const { return platform_.state_file; }
 private:
-  bool zoom_gesture_[2]{}, stick_latched_[2]{};
+  bool zoom_gesture_[2]{};
   PlaybackControls controls_;
   std::vector<BrowserItem> playlist_;
-  cyvr::Pose last_controller_pose_[2]{};
-  bool controller_seen_[2]{}, wake_gesture_[2]{};
+  bool wake_gesture_[2]{};
   float last_trigger_[2]{}, last_grip_[2]{};
   void control_activity();
+  bool controller_input(const cyvr::ControllerInput&);
   bool adjacent_video(int direction, bool play);
   float zoom_start_[2]{}, zoom_y_[2]{};
-  std::chrono::steady_clock::time_point controller_time_[2]{};
   bool shift_{}, symbols_{};
   std::uint64_t browser_revision_{};
   std::string source_, title_;
@@ -237,6 +251,9 @@ private:
   double last_performance_update_{};
   void cancel_scrub();
   bool tracks_open_{};
+  bool subtitle_settings_open_{};
+  int subtitle_settings_tab_{};
+  void draw_subtitle_settings(cyvr::DrawList&);
   int track_tab_{},track_offset_{};
   void draw_tracks(cyvr::DrawList&);
   bool track_action(int);

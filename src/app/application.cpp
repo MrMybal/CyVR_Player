@@ -118,7 +118,7 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
   thumbnail_dirty_=true;
   page_ = int(ui_.page);
   ui_.renderApplication = [this](cyvr::DrawList &d) { return draw(d); };
-  ui_.renderApplicationDock=[this](cyvr::DrawList& d){return draw_dock(d);};
+  ui_.window = cyvr::WindowOptions{};
   refresh_locations();
   ui_.renderApplicationDebug = [this](cyvr::DrawList &d) {
     return draw_performance(d);
@@ -130,60 +130,9 @@ PlayerApplication::PlayerApplication(cyvr::UiModel &ui, Platform p)
   };
   ui_.applicationTick = [this](double) { tick(); };
   ui_.applicationBack = [this] { return back(); };
-  ui_.applicationController = [this](int hand, cyvr::Vec2 stick, float trigger,
-                                     float squeeze, cyvr::Pose pose,
-                                     bool valid) {
-    const auto now = std::chrono::steady_clock::now();
-    const float dt = std::clamp(
-        std::chrono::duration<float>(now - controller_time_[hand]).count(), 0.f,
-        .05f);
-    controller_time_[hand] = now;
-    if (!valid) {
-      zoom_gesture_[hand] = false;
-      stick_latched_[hand] = false;
-      controller_seen_[hand] = false;
-      return false;
-    }
-    const bool gesture = squeeze > .65f && trigger > .55f && session_.state().ready;
-    const auto &old = last_controller_pose_[hand];
-    const float orientation = std::abs(old.orientation.x*pose.orientation.x + old.orientation.y*pose.orientation.y + old.orientation.z*pose.orientation.z + old.orientation.w*pose.orientation.w);
-    const bool moved = !controller_seen_[hand] || cyvr::length(pose.position-old.position) > .012f || orientation < .99985f;
-    const bool input = std::abs(stick.x) > .2f || std::abs(stick.y) > .2f || trigger > .1f || squeeze > .1f || std::abs(trigger-last_trigger_[hand]) > .05f || std::abs(squeeze-last_grip_[hand]) > .05f;
-    if (moved) { last_controller_pose_[hand] = pose; controller_seen_[hand] = true; }
-    last_trigger_[hand]=trigger; last_grip_[hand]=squeeze;
-    if (!gesture && (moved || input)) {
-      if (ui_.interfaceHidden && (trigger > .1f || squeeze > .1f)) wake_gesture_[hand]=true;
-      control_activity();
-    }
-    if(gesture && !ui_.interfaceHidden)controls_.activity(controls_now());
-    if (wake_gesture_[hand]) {
-      if (trigger <= .1f && squeeze <= .1f) wake_gesture_[hand]=false;
-      return true;
-    }
-    if (hand == 0) {
-      if (std::abs(stick.x) < .3f)
-        stick_latched_[hand] = false;
-      if (std::abs(stick.x) > .75f && !stick_latched_[hand]) {
-        video_input(stick.x > 0 ? 10.f : -10.f, 0);
-        stick_latched_[hand] = true;
-      }
-    } else if (std::abs(stick.y) > .2f)
-      video_input(0, stick.y * dt);
-    if (gesture) {
-      if (!zoom_gesture_[hand]) {
-        zoom_start_[hand] = image.zoom;
-        zoom_y_[hand] = pose.position.y;
-      }
-      image.zoom = std::clamp(zoom_start_[hand] +
-                                  (pose.position.y - zoom_y_[hand]) * 4.f,
-                              minimum_zoom(), 4.f);
-      state_dirty_ = true;
-      ui_.invalidate();
-    }
-    const bool consume = gesture || zoom_gesture_[hand];
-    zoom_gesture_[hand] = gesture;
-    return consume;
-  };
+  ui_.applicationPointer = [this](size_t hand,cyvr::Vec2 pos,bool down){return browser_pointer(hand,pos,down);};
+  ui_.applicationInput = [this](const cyvr::ControllerInput& input){return controller_input(input);};
+  ui_.applicationScroll = [this](cyvr::Vec2 point,cyvr::Vec2 delta){return scroll_library(point,delta.y);};
   browse(platform_.root);
 }
 PlayerApplication::~PlayerApplication() {
@@ -194,12 +143,14 @@ PlayerApplication::~PlayerApplication() {
   ui_.handleApplicationSlider = {};
   ui_.applicationTick = {};
   ui_.applicationBack = {};
-  ui_.applicationController = {};
+  ui_.applicationController = {};ui_.applicationInput = {};
+  ui_.applicationScroll={};
+  ui_.applicationPointer = {};
   ui_.compactInterface = false;
 }
 void PlayerApplication::browse(std::string path) {
   directory_ = std::move(path);folder_name_.clear();refresh_locations();
-  offset_ = 0;
+  offset_ = 0;browser_scroll_=0;browser_drag_[0]=browser_drag_[1]=false;
   entries_.clear();
   preview_present_.fill(false);
   browser_->scan(directory_);
@@ -274,22 +225,19 @@ void PlayerApplication::tick() {
       browse_status_ = browser_->status;
       if(playlist_.empty() && std::any_of(entries_.begin(),entries_.end(),[&](const auto& item){return item.location==source_;}))
         for(const auto& item:entries_)if(!item.directory && (classify_extension(item.name)==FileKind::video || classify_extension(item.name)==FileKind::splat || classify_extension(item.name)==FileKind::disc))playlist_.push_back(item);
-      if (browse_status_ != "Reading folder...")
-        offset_ = std::min(offset_, entries_.empty()
-                                        ? 0
-                                        : ((int(entries_.size()) - 1) / browser_page_size()) * browser_page_size());
+      if (browse_status_ != "Reading folder...")set_browser_scroll(browser_scroll_);
       ui_.invalidate();
     }
   }
   const double now = std::chrono::duration<double>(
                          std::chrono::steady_clock::now().time_since_epoch())
                          .count();
-  const auto preview_key = std::make_tuple(suspended_, offset_, browser_page_size(), browser_revision_);
+  const auto preview_key = std::make_tuple(suspended_, offset_, browser_visible_count(), browser_revision_);
   if (page_ == 0 && (preview_key != preview_key_ || preview_requests_.empty())) {
     preview_key_ = preview_key;
     std::vector<std::string> requests;
     if (!suspended_) {
-      for (int row = 0; row < browser_page_size(); ++row) {
+      for (int row = 0; row < browser_visible_count(); ++row) {
         const auto n = offset_ + row;
         requests.push_back(n < int(entries_.size()) && !entries_[n].directory &&
                                    classify_extension(entries_[n].name) ==
@@ -380,7 +328,39 @@ void PlayerApplication::text(char c) {
 bool PlayerApplication::action(int id) {
   control_activity();
   cancel_scrub();
-  if(id>=1400 && id<1440)return track_action(id);
+  if(id>=1900 && id<=1912){
+    if(id==1900){window_settings_open_=true;page_=4;ui_.page=cyvr::Page(page_);}
+    else if(id==1901)window_settings_open_=false;
+    else if(id==1902)ui_.window.resizable=!ui_.window.resizable;
+    else if(id==1903)ui_.window.faceViewerWhileMoving=!ui_.window.faceViewerWhileMoving;
+    else if(id==1904){ui_.settings.minimalDock=!ui_.settings.minimalDock;ui_.saveRequested=true;}
+    else if(id==1905){ui_.window={};ui_.settings.follow=cyvr::FollowMode::FaceViewer;ui_.settings.minimalDock=true;ui_.saveRequested=true;}
+    else if(id>=1910){ui_.settings.follow=cyvr::FollowMode(id-1910);ui_.saveRequested=true;}
+    state_dirty_=true;ui_.invalidate();return true;
+  }
+  if(id==1064){
+    if(ui_.presentation!=cyvr::Presentation::Immersive)return true;
+    if(session_.state().ready)id=612;
+    else {ui_.windowState=cyvr::WindowState::Closed;ui_.invalidate();return true;}
+  }
+  if(id==612 && ui_.presentation==cyvr::Presentation::Immersive && session_.state().ready){
+    controls_.compact(controls_now());ui_.compactInterface=true;ui_.windowState=cyvr::WindowState::Open;ui_.invalidate();return true;
+  }
+  if(id==611 || id==1361){
+    ui_.windowState=ui_.windowState==cyvr::WindowState::Open?cyvr::WindowState::Minimized:cyvr::WindowState::Open;
+    controls_.expand(controls_now());ui_.compactInterface=false;ui_.invalidate();return true;
+  }
+  if(id>=1400 && id<1441)return track_action(id);
+  if(id==1760){subtitle_settings_open_=false;state_dirty_=true;ui_.invalidate();return true;}
+  if(id==1761 || id==1762){subtitle_settings_tab_=id-1761;state_dirty_=true;ui_.invalidate();return true;}
+  if(id==1770)subtitle_settings.custom=!subtitle_settings.custom;
+  else if(id==1771){subtitle_settings.bold=!subtitle_settings.bold;subtitle_settings.custom=true;}
+  else if(id==1772){subtitle_settings.italic=!subtitle_settings.italic;subtitle_settings.custom=true;}
+  else if(id==1773){subtitle_settings.box=!subtitle_settings.box;subtitle_settings.custom=true;}
+  else if(id==1774)subtitle_settings.follow_depth=!subtitle_settings.follow_depth;
+  else if(id==1775)subtitle_settings={};
+  else if(id>=1790 && id<1796){subtitle_settings.color=id-1790;subtitle_settings.custom=true;}
+  if(id>=1770 && id<1796){state_dirty_=true;ui_.invalidate();return true;}
   if((id>=1030 && id<=1032) || (id>=1040 && id<=1042) || id==1051 || id==1052)format_manual_=true;
   if (id >= 1000 && id <= 1004) {
     controls_.expand(controls_now());
@@ -400,18 +380,16 @@ bool PlayerApplication::action(int id) {
   else if (id == 1012 && platform_.request_tree)
     platform_.request_tree();
   else if (id == 1013) {
-    offset_ = std::max(0, offset_ - browser_page_size());
-    preview_present_.fill(false);
+    set_browser_scroll(browser_scroll_-browser_row_height());
   } else if (id == 1014) {
-    offset_ += browser_page_size();
-    preview_present_.fill(false);
-  } else if(id==1015 || id==1016){browser_view_=id-1015;offset_=(offset_/browser_page_size())*browser_page_size();preview_requests_.clear();}
+    set_browser_scroll(browser_scroll_+browser_row_height());
+  } else if(id==1015 || id==1016){const int first=offset_;browser_view_=id-1015;set_browser_scroll(float(first/browser_columns())*browser_row_height());preview_present_.fill(false);preview_requests_.clear();}
   else if(id==1017)toggle_favorite();
   else if(id==1018 || id==1019){sidebar_tab_=id-1018;sidebar_offset_=0;refresh_locations();}
   else if(id==1026)sidebar_offset_=std::max(0,sidebar_offset_-7);
   else if(id==1027)sidebar_offset_+=7;
   else if(id>=1800 && id<1807){const auto index=sidebar_offset_+id-1800;if(sidebar_tab_){if(index<int(favorites_.size())){auto favorite=favorites_[index];browse(favorite.location);parents_=favorite.parents;folder_name_=favorite.name;}}else if(index<int(locations_.size())){parents_.clear();browse(locations_[index].location);}}
-  else if (id >= 1100 && id < 1107 &&
+  else if (id >= 1100 && id < 1100+int(preview_slots) &&
              offset_ + id - 1100 < int(entries_.size())) {
     auto item = entries_[offset_ + id - 1100];
     if (item.directory) {
@@ -448,9 +426,7 @@ bool PlayerApplication::action(int id) {
       ui_.setInterfaceHidden(true);
     }
   } else if (id == 1360) {
-    controls_.expand(controls_now()); ui_.compactInterface=false;
-  } else if (id == 1361) {
-    controls_.compact(controls_now()); ui_.compactInterface=true;
+    controls_.expand(controls_now()); ui_.compactInterface=false;ui_.windowState=cyvr::WindowState::Open;
   } else if (id == 1362 || id == 1363) {
     adjacent_video(id==1362 ? -1 : 1,true);
   } else if (id >= 1030 && id <= 1032)
@@ -566,6 +542,7 @@ ApplicationState PlayerApplication::snapshot() const {
   s.title = title_;
   s.page = page_;
   s.offset = offset_;
+  s.browser_scroll=browser_scroll_;
   s.stereo = stereo;
   s.projection = projection;
   s.half_stereo = half_stereo;
@@ -575,6 +552,8 @@ ApplicationState PlayerApplication::snapshot() const {
   s.auto_format=auto_format_;s.smooth_video=smooth_video;
   s.cinema=cinema;s.ambilight=ambilight;s.cinema_tab=cinema_tab_;
   s.tracks=session_.selection();
+  s.subtitle_settings=subtitle_settings;s.subtitle_settings_open=subtitle_settings_open_;s.subtitle_settings_tab=subtitle_settings_tab_;
+  s.window_resizable=ui_.window.resizable;s.window_face_viewer=ui_.window.faceViewerWhileMoving;s.window_settings_open=window_settings_open_;
   s.tracks_open=tracks_open_;s.track_tab=track_tab_;s.track_offset=track_offset_;
   s.display_tab = display_tab_;s.browser_view=browser_view_;s.favorites=favorites_;s.scene=scene;s.volume=volume;
   s.shift = shift_;
@@ -614,6 +593,9 @@ bool PlayerApplication::restore(bool resume_media) {
   image = s.image;
   cinema=s.cinema;cinema.sanitize();ambilight=s.ambilight;ambilight.sanitize();cinema_tab_=std::clamp(s.cinema_tab,0,2);
   display_tab_ = s.display_tab;browser_view_=s.browser_view;favorites_=s.favorites;scene=s.scene;volume=s.volume;session_.volume(volume);
+  browser_scroll_=s.browser_scroll>=0?s.browser_scroll:float(offset_/browser_columns())*browser_row_height();
+  subtitle_settings=s.subtitle_settings;subtitle_settings.sanitize();subtitle_settings_open_=s.subtitle_settings_open;subtitle_settings_tab_=s.subtitle_settings_tab;
+  ui_.window.resizable=s.window_resizable;ui_.window.faceViewerWhileMoving=s.window_face_viewer;window_settings_open_=s.window_settings_open;
   tracks_open_=s.tracks_open;track_tab_=s.track_tab;track_offset_=s.track_offset;
   shift_ = s.shift;
   symbols_ = s.symbols;
@@ -685,6 +667,15 @@ bool PlayerApplication::slide(int id, float fraction, cyvr::SliderPhase phase) {
       case 1652:ambilight.inset=.2f*f;break;
     }
     cinema.sanitize();ambilight.sanitize();state_dirty_=true;ui_.invalidate();return true;
+  }
+  if(id>=1780 && id<=1786){
+    if(phase==cyvr::SliderPhase::Cancel || !std::isfinite(fraction))return true;
+    const float f=std::clamp(fraction,0.f,1.f);
+    switch(id){case 1780:subtitle_settings.scale=.5f+2*f;break;case 1781:subtitle_settings.opacity=f;break;
+      case 1782:subtitle_settings.outline=6*f;subtitle_settings.custom=true;break;case 1783:subtitle_settings.shadow=6*f;subtitle_settings.custom=true;break;
+      case 1784:subtitle_settings.x=-.45f+.9f*f;break;case 1785:subtitle_settings.y=-.45f+.9f*f;break;
+      case 1786:subtitle_settings.distance=.5f+11.5f*f;subtitle_settings.follow_depth=false;break;}
+    subtitle_settings.sanitize();state_dirty_=true;ui_.invalidate();return true;
   }
   if(id==1371 || (id>=1690 && id<=1695)){
     if(phase==cyvr::SliderPhase::Cancel || !std::isfinite(fraction))return true;

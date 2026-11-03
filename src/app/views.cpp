@@ -109,6 +109,9 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
   auto accent = Color::hex(light ? 0x126854 : ocean ? 0x95bdff : 0x86e7cf);
   auto surface = Color::hex(light ? 0xc1d3db : ocean ? 0x293e66 : 0x22323b);
   if(immersive && ui_.compactInterface){
+    d.rect({650,674,140,7},muted,3);
+    ui_.applicationWidget(605,{630,660,180,34},cyvr::Control::Drag);
+    if(ui_.hovered()==605)icon_hint_=std::string(tr("Move playback controls"));
     d.rect({228,694,984,264},Color::hex(light?0xe4eef1:0x15242d,.96f),20);
     const int toolbar[]{1364,1365,1366,1367,1662,1368,1369};
     const Icon glyphs[]{Icon::Library,Icon::Info,Icon::Image,Icon::Move,Icon::Cinema,Icon::Tracks,Icon::Settings};
@@ -144,22 +147,23 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
   if(logo_ready_)d.image({24,10,76,76},{.5f/ui_atlas_width,(logo_atlas_y+.5f)/ui_atlas_height,159.f/ui_atlas_width,159.f/ui_atlas_height});
   d.text(logo_ready_?112:32, 22, 34, "CyVR Player", white);
   d.text(logo_ready_?358:270, 34, 18, tr("YOUR VIDEO LIBRARY"), accent);
-  if(immersive && state_.ready)icon_button(d,1361,{1174,18,62,60},Icon::Minimize,"Compact controls");
-  icon_button(d,1063,{1250,18,62,60},Icon::Settings,"Settings",page_==4);
-  icon_button(d,1062,{1330,18,62,60},immersive?Icon::Window:Icon::Headset,immersive?"Return to 2D":"Enter immersive",false,immersive||ui_.immersiveAvailable);
+  if(immersive && state_.ready)icon_button(d,1361,{1098,18,62,60},Icon::Minimize,"Minimize");
+  icon_button(d,1063,{immersive?1174.f:1250.f,18,62,60},Icon::Settings,"Settings",page_==4);
+  icon_button(d,1062,{immersive?1250.f:1330.f,18,62,60},immersive?Icon::Window:Icon::Headset,immersive?"Return to 2D":"Enter immersive",false,immersive||ui_.immersiveAvailable);
+  if(immersive)icon_button(d,1064,{1330,18,62,60},Icon::Close,"Close full interface");
   const char* pages[]{"Library","Playback","Open stream","Display","Settings"};
   for(int i=0;i<5;++i)button(d,1000+i,{32.f+i*275,94,263,62},pages[i],page_==i);
   if (page_ == 0) {
     draw_library(d);
   } else if (page_ == 1) {
-    if(tracks_open_){draw_tracks(d);return true;}
+    if(tracks_open_){draw_tracks(d);ui_.drawWindowAffordances(d);return true;}
     d.text(36, 186, 34,
            fit(d,
                state_.title.empty() ? tr("Your next screening")
                                     : std::string_view(state_.title),
                1368, 34),
            white);
-    cyvr::Rect area{32, 252, 900, 506};
+    cyvr::Rect area{32, 246, 900, 490};
     video(area);
     if (!preview_ready || immersive || state_.width <= 0 ||
         state_.height <= 0) {
@@ -170,16 +174,16 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                  840, 22),
              Color::hex(0xa7b7bf));
     }
-    d.rect({956, 252, 452, 506}, surface, 18);
-    d.text(980, 276, 19, tr("SOURCE / DECODER"), accent);
-    d.text(980, 329, 21, fit(d, tr(state_.status), 400, 21), white);
+    d.rect({956, 246, 452, 490}, surface, 18);
+    d.text(980, 264, 19, tr("SOURCE / DECODER"), accent);
+    d.text(980, 306, 21, fit(d, tr(state_.status), 400, 21), white);
     if (state_.width > 0)
-      d.text(980, 386, 26,
+      d.text(980, 348, 26,
              std::to_string(state_.width) + " × " +
                  std::to_string(state_.height) + " px",
              white);
-    d.text(980, 444, 18, fit(d, state_.codec, 400, 18), muted);
-    d.text(980, 510, 18,
+    d.text(980, 390, 18, fit(d, state_.codec, 400, 18), muted);
+    d.text(980, 426, 18,
            fit(d,
                tr(image.quality == 0   ? "Native"
                   : image.quality == 1 ? "FidelityFX CAS"
@@ -187,16 +191,13 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                                        : "Snapdragon GSR 1"),
                400, 18),
            muted);
-    d.text(980, 574, 18,
-           fit(d,
-               tr(immersive ? "Trigger / A / Back: show interface"
-                            : "Tap / Enter / Space: show interface"),
-               400, 18),
-           muted);
-    icon_button(d, 1331, {980, 664, 125, 44}, Icon::ZoomOut, "Zoom out", false, true,true);
-    icon_button(d, 1332, {1120, 664, 125, 44}, Icon::ZoomIn, "Zoom in", false, true,true);
-    icon_button(d, 1333, {1260, 664, 125, 44}, Icon::Fit, "Fit image", false, true,true);
-    button(d, 1334, {980, 716, 405, 34}, "Performance", ui_.debugVisible);
+    icon_button(d,1400,{976,480,412,54},Icon::Tracks,"Tracks, subtitles and chapters",false,!source_.empty(),true);
+    icon_button(d,1440,{976,546,412,54},Icon::Tracks,"Subtitle settings",false,true,true);
+    icon_button(d,1680,{976,612,412,54},Icon::Move,"Video placement",false,true,true);
+    icon_button(d, 1331, {976, 682, 128, 40}, Icon::ZoomOut, "Zoom out", false, true,true);
+    icon_button(d, 1332, {1118, 682, 128, 40}, Icon::ZoomIn, "Zoom in", false, true,true);
+    icon_button(d, 1333, {1260, 682, 128, 40}, Icon::Fit, "Fit image", false, true,true);
+    d.rect({32,754,1376,158},surface,16);
     const auto position = timeline_position();
     const bool canSeek =
         state_.ready && state_.seekable && state_.duration_us > 0;
@@ -211,7 +212,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
             ? float(std::clamp(double(position) / double(state_.duration_us),
                                0., 1.))
             : 0.f;
-    d.rect({timeline.x, 779, timeline.w, 10}, surface, 5);
+    d.rect({timeline.x, 779, timeline.w, 10}, Color::hex(light?0xa6bec8:0x12212a), 5);
     auto trackColor = canSeek ? accent : muted;
     trackColor.a = canSeek ? 1.f : .4f;
     if (progress > 0)
@@ -223,23 +224,16 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
              accent, knob * .5f);
     }
     ui_.applicationWidget(1025, timeline, cyvr::Control::Slider, canSeek);
-    d.text(980, 630, 18,
-           fit(d,
-               tr(canSeek ? "Drag the bar to seek"
-                          : "Seeking unavailable for this source"),
-               400, 18),
-           muted);
-    icon_button(d,1362,{32,814,74,64},Icon::Previous,"Previous",false,adjacent_video(-1,false));
-    icon_button(d,1020,{120,814,104,64},state_.playing?Icon::Pause:Icon::Play,state_.playing?"Pause":"Resume",false,state_.ready&&!state_.ended);
-    icon_button(d,1023,{238,814,74,64},Icon::Stop,"Stop",false,state_.ready);
-    icon_button(d,1363,{326,814,74,64},Icon::Next,"Next",false,adjacent_video(1,false));
-    icon_button(d,1021,{426,814,104,64},Icon::Back10,"-10 s",false,state_.ready&&state_.seekable);
-    icon_button(d,1022,{544,814,104,64},Icon::Forward10,"+10 s",false,state_.ready&&state_.seekable);
-    icon_button(d,1370,{684,814,70,64},volume>0?Icon::Volume:Icon::Mute,"Mute",volume==0);
-    const cyvr::Rect gain{776,820,268,52};d.rect({gain.x,842,gain.w,8},surface,4);d.rect({gain.x,842,gain.w*volume,8},accent,4);d.circle({gain.x+gain.w*volume,846},9,accent);ui_.applicationWidget(1371,gain,cyvr::Control::Slider);
-    button(d,1024,{1070,814,338,64},"Hide interface",false,state_.ready);
-    icon_button(d,1400,{32,895,650,52},Icon::Tracks,"Tracks, subtitles and chapters",false,!source_.empty(),true);
-    icon_button(d,1680,{702,895,350,52},Icon::Move,"Video placement",false,true,true);
+    icon_button(d,1362,{48,828,74,64},Icon::Previous,"Previous",false,adjacent_video(-1,false));
+    icon_button(d,1020,{136,828,104,64},state_.playing?Icon::Pause:Icon::Play,state_.playing?"Pause":"Resume",false,state_.ready&&!state_.ended);
+    icon_button(d,1023,{254,828,74,64},Icon::Stop,"Stop",false,state_.ready);
+    icon_button(d,1363,{342,828,74,64},Icon::Next,"Next",false,adjacent_video(1,false));
+    icon_button(d,1021,{440,828,94,64},Icon::Back10,"-10 s",false,canSeek);
+    icon_button(d,1022,{548,828,94,64},Icon::Forward10,"+10 s",false,canSeek);
+    icon_button(d,1370,{680,828,70,64},volume>0?Icon::Volume:Icon::Mute,"Mute",volume==0);
+    const cyvr::Rect gain{776,834,268,52};d.rect({gain.x,856,gain.w,8},muted,4);d.rect({gain.x,856,gain.w*volume,8},accent,4);d.circle({gain.x+gain.w*volume,860},9,accent);ui_.applicationWidget(1371,gain,cyvr::Control::Slider);
+    d.text(1064,848,20,cyvr::formatNumber(ui_.settings.language,volume*100,0)+" %",white);
+    button(d,1334,{1184,834,200,52},"Performance",ui_.debugVisible);
   } else if (page_ == 2) {
     d.text(36, 187, 34, tr("Open a video stream"), white);
     d.text(36, 243, 22, tr("HTTP(S), HLS, RTSP — enter the complete address."),
@@ -306,7 +300,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
       button(d,1053,{1034,814,370,52},"Detect once");
       const char* detection=(!auto_format_ || format_manual_)?"Manual video format":detected_layout_.ambiguous?"Projection not recognised; select the format manually.":detected_layout_.evidence==3?"Automatic format: decoded stereo views":detected_layout_.evidence==2?"Automatic format: video metadata":detected_layout_.evidence==1?"Automatic format: filename hints":"Automatic format: standard 2D";
       d.text(36,827,18,tr(detection),accent);
-      d.text(36, 878, 20, tr("Left stick: seek 10 s / Right stick: zoom"),
+      d.text(36, 878, 20, tr("Joystick left/right: turn view / Right stick up/down: zoom"),
              muted);
       if (immersive)
         d.text(36, 905, 17,
@@ -412,6 +406,7 @@ bool PlayerApplication::draw(cyvr::DrawList &d) {
                               "close this window.")
              : std::string_view(ui_.toast()),
          accent);
+  ui_.drawWindowAffordances(d);
   return true;
 }
 } // namespace cyvr::player

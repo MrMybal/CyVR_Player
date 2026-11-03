@@ -1,5 +1,6 @@
 #include "cyvr/player/application.hpp"
 #include "cyvr/player/video_placement.hpp"
+#include "cyvr/player/video_interaction.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -52,6 +53,37 @@ int main() {
     }
     CinemaSettings cinema;cinema.width=7;cinema.distance=6;cinema.elevation=.75f;cinema.curvature=90;cinema.pitch=25;cinema.roll=-12;
     const auto customized=video.screen(image,cinema);
+    for(float pitch:{-90.f,-70.f,0.f,55.f,90.f})for(float yaw:{-170.f,-60.f,0.f,80.f,175.f}){
+      SceneSettings settings;settings.x=.4f;settings.y=-.5f;settings.z=.8f;settings.pitch=pitch-cinema.pitch;settings.yaw=yaw;settings.roll=33;
+      const auto desired=video.screen(image,cinema,settings);
+      const auto restored=video.scene_for(desired,image,cinema,{});
+      require(same(video.screen(image,cinema,restored),desired),"Hand placement inverse lost translation or wrist orientation");
+    }
+    {
+      VideoGrab grab;const Pose hand{{.2f,1.2f,-.5f},yawRotation(.1f)};
+      const auto first=grab.update(hand,true,true,true,customized);
+      require(first && same(*first,customized),"Grabbing must not snap the movie to the controller");
+      Pose moved=hand;moved.position=moved.position+Vec3{.4f,.2f,-.7f};moved.orientation=yawRotation(.6f);
+      const auto dragged=grab.update(moved,true,true,false,customized);
+      require(dragged && same(compose_pose(inverse_pose(moved),*dragged),compose_pose(inverse_pose(hand),customized)),"Moving/turning the hand must retain its rigid offset to the movie");
+      const auto persisted=video.scene_for(*dragged,image,cinema,{});
+      require(same(video.screen(image,cinema,persisted),*dragged),"Release pose must use the persisted six-axis settings");
+      require(!grab.update(moved,true,false,true,customized) && !grab.active(),"Trigger release did not stop the grab");
+      require(!grab.update(hand,true,true,false,customized),"A UI press started a movie grab");
+      require(!grab.update(moved,true,true,true,customized),"Dragging a UI press outside the panel grabbed the movie");
+      grab.update(hand,true,false,false,customized);grab.update(hand,true,true,true,customized);grab.cancel();
+      require(!grab.update(moved,true,true,true,customized),"A tracking origin change resumed a held grab in another space");
+      grab.update(hand,true,false,false,customized);
+      require(bool(grab.update(hand,true,true,true,customized)),"Released controller could not start a new grab");
+      require(!grab.update(hand,false,true,true,customized) && !grab.active(),"Tracking loss did not cancel the grab");
+      require(hits_cinema({{0,1.6f,0},{}},original,4,2.25f),"Forward ray missed the cinema");
+      require(!hits_cinema({{9,1.6f,0},{}},original,4,2.25f),"A ray outside the movie could grab its plane");
+      require(hits_cinema({{0,1.6f,0},{}},original,4,2.25f,4),"Forward ray missed the curved cinema");
+      const auto turn=rotate_video_view(original,head,.5f,false);
+      require(near(length(turn.position-head.position),length(original.position-head.position)) && !same(turn.position,original.position),"Joystick view rotation must orbit the cinema at its existing distance");
+      const auto panorama=rotate_video_view(original,head,.5f,true);
+      require(same(panorama.position,original.position) && !same(panorama.orientation,original.orientation),"Panorama yaw must rotate its infinite view without translating it");
+    }
     require(same(customized.position,{0,2.35f,-6}),"Screen distance and height must be independent of the controls");
     const auto center=cylinder_center(customized,cinema.radius());
     const auto middle=center.position+rotate(center.orientation,{0,0,-cinema.radius()});

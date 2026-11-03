@@ -61,8 +61,9 @@ int main(int argc,char** argv){try{
   if(!ui.compactInterface)throw std::runtime_error("Immersive playback did not choose compact controls");
   for(int id:{1025,1020,1362,1363,1360})if(std::none_of(ui.widgets().begin(),ui.widgets().end(),[&](const auto& w){return w.id==id;}))throw std::runtime_error("Compact playback control missing");
   app.action(1360);ui.drawMain(controls);if(ui.compactInterface)throw std::runtime_error("Cannot open full playback interface");
-  app.action(1361);app.action(1024);if(!ui.interfaceHidden)throw std::runtime_error("Cannot hide compact interface");
-  if(!ui.applicationController(0,{},.7f,0,{{0,0,0},{}},true) || ui.interfaceHidden || !ui.compactInterface)throw std::runtime_error("Controller wake did not restore compact controls exclusively");
+  app.action(1064);app.action(1024);if(!ui.interfaceHidden)throw std::runtime_error("Cannot hide compact interface");
+  cyvr::ControllerInput input;input.trigger=.7f;input.poseValid=true;
+  if(!ui.controllerInput(input) || ui.interfaceHidden || !ui.compactInterface)throw std::runtime_error("Controller wake did not restore compact controls exclusively");
   app.session().stop();wait([&]{return !app.session().state().ready;});
   std::cout<<"Splat sequence playback, paused seek, generation changes, compact/full controls and consumed wake gesture passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

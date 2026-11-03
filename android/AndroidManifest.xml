@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:metavr="http://schemas.meta.com/metavr-sdk" package="com.cyvr.player" android:versionCode="19" android:versionName="0.4.12-alpha.2" android:installLocation="auto">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:metavr="http://schemas.meta.com/metavr-sdk" package="com.cyvr.player" android:versionCode="24" android:versionName="0.4.15-beta.1" android:installLocation="auto">
     <uses-sdk android:minSdkVersion="32" android:targetSdkVersion="34" />
     <metavr:uses-metavr-sdk metavr:minSdkVersion="69" metavr:targetSdkVersion="207" />
     <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="false" />

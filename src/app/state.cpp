@@ -146,6 +146,15 @@ bool save_application_state(const std::string &path,
     c.put(s.favorites.size());
     for(const auto& favorite:s.favorites){c.put(favorite.location);c.put(favorite.name);if(favorite.parents.size()>32)throw std::runtime_error("Bookmark navigation limit exceeded");c.put(favorite.parents.size());for(const auto& parent:favorite.parents)c.put(parent);}
     c.put(std::uint64_t(0x485a3132));c.put(s.smooth_video?1:0);
+    c.put(std::uint64_t(0x53554231));auto sub=s.subtitle_settings;sub.sanitize();
+    for(float value:{sub.scale,sub.x,sub.y,sub.opacity,sub.outline,sub.shadow,sub.distance}){std::uint32_t bits;std::memcpy(&bits,&value,4);c.put(bits);}
+    c.put(sub.color);c.put((sub.custom?1:0)|(sub.bold?2:0)|(sub.italic?4:0)|(sub.box?8:0)|(sub.follow_depth?16:0));
+    c.put(s.subtitle_settings_open?1:0);c.put(std::clamp(s.subtitle_settings_tab,0,1));
+    c.put(std::uint64_t(0x53434c31));
+    const float scroll=std::isfinite(s.browser_scroll)?std::clamp(s.browser_scroll,-1.f,2600000.f):-1.f;
+    std::uint32_t scroll_bits;std::memcpy(&scroll_bits,&scroll,4);c.put(scroll_bits);
+    c.put(std::uint64_t(0x574e4431)); // WND1: immersive interface window preferences.
+    c.put((s.window_resizable?1:0)|(s.window_face_viewer?2:0)|(s.window_settings_open?4:0));
     if (c.bytes.size() > max_bytes)
       throw std::runtime_error("State budget exceeded");
     std::lock_guard<std::mutex> lock(writes);
@@ -265,6 +274,23 @@ static std::optional<ApplicationState> read_state(const std::string &path) noexc
           }
         }
       }
+    }
+    if(c.cursor<c.bytes.size()){
+      if(c.get()!=0x53554231)return {};
+      auto& sub=s.subtitle_settings;
+      for(float* value:{&sub.scale,&sub.x,&sub.y,&sub.opacity,&sub.outline,&sub.shadow,&sub.distance}){const auto raw=c.get();if(raw>UINT32_MAX)return {};const auto bits=std::uint32_t(raw);std::memcpy(value,&bits,4);}
+      const auto color=c.get(),flags=c.get();if(color>5 || flags>31)return {};sub.color=int(color);
+      sub.custom=flags&1;sub.bold=flags&2;sub.italic=flags&4;sub.box=flags&8;sub.follow_depth=flags&16;sub.sanitize();
+      const auto opened=c.get(),tab=c.get();if(opened>1 || tab>1)return {};s.subtitle_settings_open=opened!=0;s.subtitle_settings_tab=int(tab);
+    }
+    if(c.cursor<c.bytes.size()){
+      if(c.get()!=0x53434c31)return {};const auto raw=c.get();if(raw>UINT32_MAX)return {};
+      const auto bits=std::uint32_t(raw);std::memcpy(&s.browser_scroll,&bits,4);
+      s.browser_scroll=std::isfinite(s.browser_scroll)?std::clamp(s.browser_scroll,-1.f,2600000.f):-1.f;
+    }
+    if(c.cursor<c.bytes.size()){
+      if(c.get()!=0x574e4431)return {};const auto flags=c.get();if(flags>7)return {};
+      s.window_resizable=flags&1;s.window_face_viewer=flags&2;s.window_settings_open=flags&4;
     }
     if (c.cursor != c.bytes.size() || s.url.size() > 2048)
       return {};

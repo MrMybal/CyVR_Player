@@ -59,7 +59,7 @@ extern "C" void android_main(android_app *android) {
         [&] { return current; }, bridge.presentation_mode() == 1);
     cyvr::AndroidAppConfig config;
     config.name = "CyVR Player";
-    config.version = 19;
+    config.version = 24;
     config.immersiveEnabled = CYVR_ENABLE_IMMERSIVE;
     config.nativeResolution = true;
     config.viewFallback = true;
@@ -97,7 +97,11 @@ extern "C" void android_main(android_app *android) {
           else if (event[0] == "show_interface")
             player->show_interface();
           else if (event[0] == "video_key") {
-            if (!player->show_interface()) {
+            const bool first=event[2].empty() || event[2]=="0";
+            if((first && player->show_interface()) || ui.interfaceHidden)continue;
+            if(player->page()==0){
+              if(event[1]=="19" || event[1]=="20")ui.scroll(ui.pointerPosition(0),{0,event[1]=="19"?-72.f:72.f});
+            }else if(first){
               if (event[1] == "21")
                 player->video_input(-10, 0);
               else if (event[1] == "22")

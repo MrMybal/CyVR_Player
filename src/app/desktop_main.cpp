@@ -120,11 +120,15 @@ LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w, LPARAM l) {
             if ((l & (LPARAM(1) << 30)) && (d->ui.interfaceHidden || d->consumeCharacter)) return 0;
             if (d->app->show_interface()) { d->consumeCharacter = true; return 0; }
             if(w==VK_LEFT||w==VK_RIGHT){d->app->video_input(w==VK_LEFT?-10.f:10.f,0);return 0;}
-            if(w==VK_UP||w==VK_DOWN){d->app->video_input(0,w==VK_UP?.1f:-.1f);return 0;}
+            if(w==VK_UP||w==VK_DOWN){if(!d->ui.scroll(d->ui.pointerPosition(0),{0,w==VK_UP?-72.f:72.f}) && d->app->page()!=0)d->app->video_input(0,w==VK_UP?.1f:-.1f);return 0;}
             if (w == VK_F11) { d->app->action(1024); return 0; }
             return DefWindowProcW(window, message, w, l);
-        case WM_MOUSEWHEEL:
-            d->app->video_input(0,GET_WHEEL_DELTA_WPARAM(w)/float(WHEEL_DELTA)*.15f);return 0;
+        case WM_MOUSEWHEEL: {
+            POINT position{short(LOWORD(l)),short(HIWORD(l))};ScreenToClient(window,&position);
+            const float steps=GET_WHEEL_DELTA_WPARAM(w)/float(WHEEL_DELTA);
+            if(!d->ui.scroll(d->point(MAKELPARAM(position.x,position.y)),{0,-steps*72}))d->app->video_input(0,steps*.15f);
+            return 0;
+        }
         case WM_KEYUP:
             d->consumeCharacter = false;
             return DefWindowProcW(window, message, w, l);

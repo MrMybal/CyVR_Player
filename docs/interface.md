@@ -78,3 +78,15 @@ Ambilight uses one optional alpha layer behind the film and captions, following 
 The selected video track carries independent stereo/projection hints from FFmpeg's codec-parameter side data and container tags. New opens combine them with bounded filename parsing, on the media worker/UI metadata transition only. A media-request identifier prevents a previous worker result from applying its layout to a newer file. Metadata takes priority over naming; decoded multiview has priority for actual output packing. The UI's existing layout controls set manual mode, with explicit re-detection available. No additional per-frame image analysis runs.
 
 FMT1 appends the manual/automatic choice to the existing private checkpoint. Legacy checkpoints keep their existing selections. New files enable detection, while activity changes and process restarts preserve a manual choice for the current source. Ordinary videos receive a neutral 2D layout, rather than inheriting the previous panorama. The Android 2D entry point still creates no OpenXR session.
+
+## 0.4.14 direct movie manipulation
+
+The preferred foundation applicationInput hook supplies a current panel-ray hit together with predicted LOCAL controller pose, thumbstick and trigger/grip. File scrolling returns false so native pointer hover remains intact; a full press or file capture protects selection. The Android 2D host forwards system ACTION_SCROLL and generic joystick axes without OpenXR.
+
+The player converts controller poses into its active movie reference space before applying a rigid grab offset. VideoPlacement::scene_for publishes the result through the saved six-axis settings. Flat and curved cinema hit tests use the displayed dimensions. Joystick yaw rotates cinema around the viewer and rotates panoramas in place. UI widgets and wake gestures take priority. Grabs cancel on origin/space changes and tracking loss; known tracking deltas still rebase the independent movie pose. The reusable input hooks remain part of the MIT foundation.
+
+## 0.4.15 immersive window controls
+
+The player uses CyVR_UI 0.9.1's native window bar, grip movement and edge/corner resizing. Its custom main view draws the foundation's resize highlights. Window manipulation owns input before file scrolling, movie grabs and zoom; the movie keeps its independent pose. The compact playback bar retains its explicit trigger handle (605), with surface grips disabled so they remain available to the player outside the full UI. Closing the full interface during playback returns to the compact bar; minimizing retains the full interface and its navigation.
+
+Settings → Interface window exposes resizing, facing during movement, hover icons and World/Face viewer/Follow view placement. WND1 appends the application window preferences to the checkpoint; older records receive enabled resizing and facing without changing playback, captions or navigation. The foundation saves dock and placement preferences in its existing settings. Physical panel placement stays session-local. Android 2D keeps system-owned window controls and creates no OpenXR session.

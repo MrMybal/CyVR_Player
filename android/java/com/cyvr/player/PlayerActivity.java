@@ -64,8 +64,8 @@ public class PlayerActivity extends NativeActivity {
         int code=event.getKeyCode();
         if(code==android.view.KeyEvent.KEYCODE_DPAD_LEFT || code==android.view.KeyEvent.KEYCODE_DPAD_RIGHT
                 || code==android.view.KeyEvent.KEYCODE_DPAD_UP || code==android.view.KeyEvent.KEYCODE_DPAD_DOWN){
-            if(event.getAction()==android.view.KeyEvent.ACTION_DOWN && event.getRepeatCount()==0)
-                enqueue("video_key",Integer.toString(code),"");
+            if(event.getAction()==android.view.KeyEvent.ACTION_DOWN)
+                enqueue("video_key",Integer.toString(code),Integer.toString(event.getRepeatCount()));
             return true;
         }
         if(code==android.view.KeyEvent.KEYCODE_F11){

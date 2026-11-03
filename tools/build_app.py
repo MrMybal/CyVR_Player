@@ -20,19 +20,21 @@ JAVA=Path(os.environ.get('JAVA_HOME',r'C:\Program Files\Android\Android Studio\j
 BUILD_TOOLS=SDK/'build-tools/35.0.1'
 ANDROID_JAR=SDK/'platforms/android-34/android.jar'
 def run(*args):subprocess.run([str(a) for a in args],check=True,cwd=ROOT)
-def configure(target,immersive=True,alpha=False):
+def configure(target,immersive=True,alpha=False,beta=False):
+    release=alpha or beta
     foundation=foundation_sources(UI)
     if immersive and (UI/'tools/prepare_pbr.py').is_file():
         run('python',UI/'tools/prepare_pbr.py','--check')
     if target=='android':
-        media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if alpha else 'android-arm64')
+        # Alpha and Beta share the expanded, optimized media dependency profile.
+        media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if release else 'android-arm64')
         origin=media/'origin.json'
         flags=json.loads(origin.read_text()).get('configure',[]) if origin.exists() else []
         if not all(flag in flags for flag in ('--enable-decoders','--enable-demuxers','--enable-zlib','--enable-libdav1d')):
             raise RuntimeError('Rebuild the expanded Android codec profile first: python tools/build_ffmpeg_android.py'+(' --alpha' if alpha else ''))
-    directory=ROOT/'build'/('app-'+target+('-panel' if target=='android' and not immersive else '')+('-alpha' if alpha else ''))
+    directory=ROOT/'build'/('app-'+target+('-panel' if target=='android' and not immersive else '')+('-beta' if beta else '-alpha' if alpha else ''))
     common=[CMAKE,'-S',ROOT,'-B',directory,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={NINJA}',
-        '-DCMAKE_BUILD_TYPE='+('Release' if alpha else 'RelWithDebInfo'),'-DCYVR_PLAYER_WITH_FFMPEG=ON','-DCYVR_PLAYER_BUILD_APP=ON',
+        '-DCMAKE_BUILD_TYPE='+('Release' if release else 'RelWithDebInfo'),'-DCYVR_PLAYER_WITH_FFMPEG=ON','-DCYVR_PLAYER_BUILD_APP=ON',
         f'-DCYVR_UI_ROOT={UI}',
         f'-DPython3_EXECUTABLE:FILEPATH={sys.executable}',
         '-DCYVR_ENABLE_IMMERSIVE='+('ON' if immersive else 'OFF'),
@@ -42,8 +44,8 @@ def configure(target,immersive=True,alpha=False):
     if target=='android':common += [f'-DCMAKE_TOOLCHAIN_FILE={NDK / "build/cmake/android.toolchain.cmake"}',
         '-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-32','-DANDROID_STL=c++_static','-DCYVR_PLAYER_BUILD_TESTS=OFF',
         '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g -DNDEBUG','-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g -DNDEBUG']
-    if target=='android' and alpha:
-        flags=f'-O3 -g0 -DNDEBUG -ffile-prefix-map={ROOT.as_posix()}=/cyvr-player -ffile-prefix-map={NDK.as_posix()}=/android-ndk'
+    if target=='android' and release:
+        flags=f'-O3 -g0 -DNDEBUG -ffile-prefix-map={ROOT.as_posix()}=/cyvr-player -ffile-prefix-map={UI.as_posix()}=/cyvr-ui -ffile-prefix-map={NDK.as_posix()}=/android-ndk'
         common += [f'-DCYVR_PLAYER_FFMPEG_ROOT={ROOT / ".deps/ffmpeg/android-arm64-alpha"}',
             f'-DCMAKE_C_FLAGS_RELEASE={flags}',f'-DCMAKE_CXX_FLAGS_RELEASE={flags}',
             '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=-Wl,--strip-all']
@@ -88,8 +90,9 @@ def notices(destination):
                 if file.is_file() and (file.name.lower().startswith(('license','copying','ofl','notice'))):
                     relative=str(file.relative_to(folder)).replace('\\','_').replace('/','_')
                     shutil.copyfile(file,destination/(folder.name+'_'+relative))
-def android(immersive=True,alpha=False):
-    directory=configure('android',immersive,alpha);classes=directory/'java';classes.mkdir(exist_ok=True)
+def android(immersive=True,alpha=False,beta=False):
+    release=alpha or beta
+    directory=configure('android',immersive,alpha,beta);classes=directory/'java';classes.mkdir(exist_ok=True)
     run(JAVA/'javac.exe','-source','8','-target','8','-Xlint:-options','-classpath',ANDROID_JAR,'-d',classes,*sorted((ROOT/'android/java').rglob('*.java')))
     jar=directory/'classes.jar'
     with zipfile.ZipFile(jar,'w') as archive:
@@ -98,10 +101,10 @@ def android(immersive=True,alpha=False):
     notices(directory/'assets/licenses')
     resources=directory/'resources.apk'
     manifest=ROOT/'android/AndroidManifest.xml'
-    if not immersive or alpha:
+    if not immersive or release:
         ET.register_namespace('android','http://schemas.android.com/apk/res/android');ET.register_namespace('metavr','http://schemas.meta.com/metavr-sdk')
         tree=ET.parse(manifest);application=tree.getroot().find('application')
-        if alpha:application.set('{http://schemas.android.com/apk/res/android}debuggable','false')
+        if release:application.set('{http://schemas.android.com/apk/res/android}debuggable','false')
         if not immersive:
             for activity in list(application.findall('activity')):
                 if activity.get('{http://schemas.android.com/apk/res/android}name','').endswith('.ImmersiveActivity'):application.remove(activity)
@@ -114,21 +117,21 @@ def android(immersive=True,alpha=False):
     with zipfile.ZipFile(resources) as source,zipfile.ZipFile(unsigned,'w') as archive:
         for item in source.infolist():archive.writestr(item.filename,source.read(item.filename),compress_type=item.compress_type)
         archive.write(directory/'classes.dex','classes.dex')
-        media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if alpha else 'android-arm64')
+        media=ROOT/'.deps/ffmpeg'/('android-arm64-alpha' if release else 'android-arm64')
         libs=[directory/'libcyvr_player.so',*sorted((media/'lib').glob('*.so'))]
         if immersive:libs.append(UI/'.deps/openxr/prefab/modules/openxr_loader/libs/android.arm64-v8a/libopenxr_loader.so')
         for file in libs:
-            if alpha:
+            if release:
                 staged=directory/'package-libs'/file.name;staged.parent.mkdir(exist_ok=True);shutil.copyfile(file,staged)
                 run(NDK/'toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe','--strip-unneeded',staged)
                 file=staged
             archive.write(file,'lib/arm64-v8a/'+file.name,compress_type=zipfile.ZIP_STORED)
     aligned=directory/'aligned.apk';run(BUILD_TOOLS/'zipalign.exe','-P','16','-f','4',unsigned,aligned)
     key=ROOT/'.cache/debug.keystore';key.parent.mkdir(exist_ok=True)
-    if alpha and not key.exists():raise RuntimeError('Alpha updates require the existing development signing key; it is never included in release assets.')
+    if release and not key.exists():raise RuntimeError('Prerelease updates require the existing development signing key; it is never included in release assets.')
     if not key.exists():run(JAVA/'keytool.exe','-genkeypair','-keystore',key,'-storepass','android','-keypass','android','-alias','androiddebugkey','-keyalg','RSA','-keysize','2048','-validity','10000','-dname','CN=CyVR Player Development,O=CyVR,C=FR')
     version=ET.parse(manifest).getroot().get('{http://schemas.android.com/apk/res/android}versionName')
-    name=f'CyVR_Player-{version}-'+('' if immersive else 'panel-')+'arm64.apk' if alpha else ('CyVR_Player-debug.apk' if immersive else 'CyVR_Player-panel-debug.apk')
+    name=f'CyVR_Player-{version}-'+('' if immersive else 'panel-')+'arm64.apk' if release else ('CyVR_Player-debug.apk' if immersive else 'CyVR_Player-panel-debug.apk')
     output=ROOT/'dist/android'/name;output.parent.mkdir(parents=True,exist_ok=True)
     signer=BUILD_TOOLS/'lib/apksigner.jar'
     run(JAVA/'java.exe','-jar',signer,'sign','--ks',key,'--ks-pass','pass:android','--key-pass','pass:android','--out',output,aligned)
@@ -140,9 +143,10 @@ def windows():
     for file in (ROOT/'.deps/ffmpeg/windows/bin').glob('*.dll'):shutil.copyfile(file,output/file.name)
     notices(output/'assets/licenses');print('Windows preview:',output/'CyVR_Player.exe')
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--target',choices=['windows','android','all'],default='all');parser.add_argument('--no-immersive',action='store_true');parser.add_argument('--alpha',action='store_true');args=parser.parse_args()
-    if args.alpha and args.target!='android':parser.error('--alpha requires --target android')
+    parser=argparse.ArgumentParser();parser.add_argument('--target',choices=['windows','android','all'],default='all');parser.add_argument('--no-immersive',action='store_true')
+    channel=parser.add_mutually_exclusive_group();channel.add_argument('--alpha',action='store_true');channel.add_argument('--beta',action='store_true');args=parser.parse_args()
+    if (args.alpha or args.beta) and args.target!='android':parser.error('Prerelease builds require --target android')
     run('python',ROOT/'tools/generate_player_locales.py')
     run('python',ROOT/'tools/adapt_gsr1.py','--check')
     if args.target in ('windows','all'):windows()
-    if args.target in ('android','all'):android(not args.no_immersive,args.alpha)
+    if args.target in ('android','all'):android(not args.no_immersive,args.alpha,args.beta)
