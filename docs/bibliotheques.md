@@ -1,6 +1,6 @@
 # Current dependency profile — 0.4.5
 
-The actual implemented scope is in the English [README](../README.md). FFmpeg now enables its built-in compatible decoders/demuxers and zlib. Libass (ISC), FreeType (FTL), HarfBuzz (MIT) and FriBidi (LGPL-2.1-or-later) provide subtitle styling/shaping. The pinned SplatKit Vulkan subset and VulkanMemoryAllocator are MIT; the player adapter borrows the host device instead of using their reference Android view. No INRIA noncommercial renderer is included. Exact source archive hashes are in `dependencies.lock.json`; corresponding notices ship in the APK. CyVR_UI retains MIT; CyVR_Player retains GPL-3.0-only.
+The actual implemented scope is in the English [user guide](user-guide.md). FFmpeg now enables its built-in compatible decoders/demuxers and zlib. Libass (ISC), FreeType (FTL), HarfBuzz (MIT) and FriBidi (LGPL-2.1-or-later) provide subtitle styling/shaping. The pinned SplatKit Vulkan subset and VulkanMemoryAllocator are MIT; the player adapter borrows the host device instead of using their reference Android view. No INRIA noncommercial renderer is included. Exact source archive hashes are in `dependencies.lock.json`; corresponding notices ship in the APK. CyVR_UI retains MIT; CyVR_Player retains GPL-3.0-only.
 
 The remaining sections record the earlier selection rationale and proposed coverage; they are not an assertion that every protocol/format is implemented.
 

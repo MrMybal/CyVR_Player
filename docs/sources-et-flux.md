@@ -1,6 +1,6 @@
 # Current source/track support — 0.4.6
 
-See the [README container/audio/subtitle section](../README.md#containers-audio-and-subtitles) for the current profile. Seekable-source video/audio/subtitle track changes, chapters, external subtitles, AAudio output and software video fallback are implemented. Software decode still depends on the compiled codec and available mobile CPU. Android does not currently bundle libxml2/DASH, libSRT, SMB/NFS or proprietary service DRM. AV1 software fallback, MVC/MV-HEVC stereo and caller-supplied ClearKey JWK/CENC are implemented; see the README for their tested scope. A desktop integration result must not be treated as Android protocol coverage.
+See the [user guide's container/audio/subtitle section](user-guide.md#containers-audio-and-subtitles) for the current profile. Seekable-source video/audio/subtitle track changes, chapters, external subtitles, AAudio output and software video fallback are implemented. Software decode still depends on the compiled codec and available mobile CPU. Android does not currently bundle libxml2/DASH, libSRT, SMB/NFS or proprietary service DRM. AV1 software fallback, MVC/MV-HEVC stereo and caller-supplied ClearKey JWK/CENC are implemented; see the user guide for their tested scope. A desktop integration result must not be treated as Android protocol coverage.
 
 The notes below document earlier design and validation stages.
 
